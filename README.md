@@ -1,49 +1,27 @@
-<div align="center">
+# talos-hetzner
 
-  <img src="https://avatars.githubusercontent.com/u/182015181" alt="logo" width="225" height="auto" />
-  <h1>Hcloud Kubernetes</h1>
+Terraform module that deploys a Talos Linux Kubernetes cluster on Hetzner Cloud.
 
-  <p>
-    Terraform Module to deploy Kubernetes on Hetzner Cloud! 
-  </p>
-
-<!-- Badges -->
-<p>
-  <a href="https://github.com/hcloud-k8s/terraform-hcloud-kubernetes/releases/latest">
-    <img src="https://img.shields.io/github/release/hcloud-k8s/terraform-hcloud-kubernetes?logo=github" alt="last update" />
-  </a>
-  <a href="https://github.com/hcloud-k8s/terraform-hcloud-kubernetes/commit/main">
-    <img src="https://img.shields.io/github/last-commit/hcloud-k8s/terraform-hcloud-kubernetes?logo=github" alt="last update" />
-  </a>
-  <a href="https://github.com/hcloud-k8s/terraform-hcloud-kubernetes/stargazers">
-    <img src="https://img.shields.io/github/stars/hcloud-k8s/terraform-hcloud-kubernetes" alt="stars" />
-  </a>
-  <a href="https://github.com/hcloud-k8s/terraform-hcloud-kubernetes/network/members">
-    <img src="https://img.shields.io/github/forks/hcloud-k8s/terraform-hcloud-kubernetes" alt="forks" />
-  </a>
-  <a href="https://search.opentofu.org/module/hcloud-k8s/kubernetes/hcloud">
-    <img src="https://img.shields.io/badge/OpenTofu-Hcloud--K8s-FFDA18?logo=opentofu" alt="OpenTofu Module" />
-  </a>
-  <a href="https://registry.terraform.io/modules/hcloud-k8s/kubernetes/hcloud">
-    <img src="https://img.shields.io/terraform/module/dt/hcloud-k8s/kubernetes/hcloud?logo=terraform&label=Terraform" alt="Terraform Registry downloads" />
-  </a>
-  <a href="https://github.com/hcloud-k8s/terraform-hcloud-kubernetes/issues/">
-    <img src="https://img.shields.io/github/issues/hcloud-k8s/terraform-hcloud-kubernetes?logo=github" alt="open issues" />
-  </a>
-  <a href="https://github.com/hcloud-k8s/terraform-hcloud-kubernetes/pulls">
-    <img src="https://img.shields.io/github/issues-pr/hcloud-k8s/terraform-hcloud-kubernetes?logo=github" alt="open pull requests" />
-  </a>
-  <a href="https://github.com/hcloud-k8s/terraform-hcloud-kubernetes/discussions">
-    <img src="https://img.shields.io/github/discussions/hcloud-k8s/terraform-hcloud-kubernetes?logo=github&label=discussions" alt="discussions" />
-  </a>
-  <a href="https://github.com/hcloud-k8s/terraform-hcloud-kubernetes/blob/main/LICENSE">
-    <img src="https://img.shields.io/github/license/hcloud-k8s/terraform-hcloud-kubernetes?logo=github" alt="license" />
-  </a>
-</p>
-
-</div>
-
-<br />
+> [!NOTE]
+> This module is based on the excellent
+> [hcloud-k8s/terraform-hcloud-kubernetes](https://github.com/hcloud-k8s/terraform-hcloud-kubernetes)
+> (MIT, forked at upstream 5.10.0 with its history intact), trimmed down a bit to what we actually need and extended where our
+> setup demanded it. The notable additions on top of upstream:
+>
+> - **Tailscale subnet router** (`subnet_router.tf`) — an optional Hetzner VM
+>   that joins your tailnet, advertises the cluster's private CIDR, and
+>   provides outbound NAT for fully-private clusters
+>   (`subnet_router_enabled`, `cluster_egress_via_subnet_router`).
+> - **`cluster_access = "private"`** with no public node IPs and no inbound
+>   firewall rules — the Kube and Talos APIs are reachable only over the
+>   tailnet.
+> - **`kube_api_env`** — environment variables for kube-apiserver (mainly
+>   `GOMEMLIMIT` on small control planes).
+>
+> Attribution and the full list of changes: [NOTICE.md](NOTICE.md). The
+> documentation below comes from upstream and still describes the module
+> surface accurately; features we removed are gone from `variables.tf` too, so
+> when in doubt the code is the reference.
 
 <!-- Table of Contents -->
 # 📔 Overview
