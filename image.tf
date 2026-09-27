@@ -139,6 +139,13 @@ resource "talos_image_factory_schematic" "cloud" {
   )
 }
 
+# Renamed upstream in 5.5.0; without this, clusters coming from the 4.x fork see
+# an unknown schematic ID and rebuild the image and re-run every Talos upgrade.
+moved {
+  from = talos_image_factory_schematic.this
+  to   = talos_image_factory_schematic.cloud
+}
+
 resource "talos_image_factory_schematic" "metal" {
   for_each = local.bare_metal_servers
 
