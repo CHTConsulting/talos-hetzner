@@ -52,24 +52,14 @@ locals {
   }
 
   # Kubelet extra mounts
-  talos_kubelet_extra_mounts = concat(
-    var.longhorn_enabled ? [
-      {
-        source      = "/var/lib/longhorn"
-        destination = "/var/lib/longhorn"
-        type        = "bind"
-        options     = ["bind", "rshared", "rw"]
-      }
-    ] : [],
-    [
-      for mount in var.talos_kubelet_extra_mounts : {
-        source      = mount.source
-        destination = coalesce(mount.destination, mount.source)
-        type        = mount.type
-        options     = mount.options
-      }
-    ]
-  )
+  talos_kubelet_extra_mounts = [
+    for mount in var.talos_kubelet_extra_mounts : {
+      source      = mount.source
+      destination = coalesce(mount.destination, mount.source)
+      type        = mount.type
+      options     = mount.options
+    }
+  ]
 
   # Talos Discovery
   talos_discovery_enabled = var.talos_discovery_kubernetes_enabled || var.talos_discovery_service_enabled

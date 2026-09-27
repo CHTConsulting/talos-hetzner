@@ -68,17 +68,7 @@ locals {
     local.talos_image_label_selector_exact
   )
 
-  talos_image_extensions_longhorn = [
-    "siderolabs/iscsi-tools",
-    "siderolabs/util-linux-tools"
-  ]
-
-  talos_image_extensions_base = distinct(
-    concat(
-      var.talos_image_extensions,
-      var.longhorn_enabled ? local.talos_image_extensions_longhorn : []
-    )
-  )
+  talos_image_extensions_base = distinct(var.talos_image_extensions)
 
   talos_cloud_image_extensions = distinct(
     concat(
