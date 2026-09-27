@@ -172,12 +172,13 @@ data "helm_template" "cilium" {
 }
 
 locals {
+  # join/compact instead of a heredoc: a null part must not render a literal
+  # `null` YAML document, which crashes Talos's SSA apply in `talosctl upgrade-k8s`.
   cilium_manifest = var.cilium_enabled ? {
-    name     = "cilium"
-    contents = <<-EOF
-      ${yamlencode(local.cilium_ipsec_keys_manifest)}
-      ---
-      ${data.helm_template.cilium.manifest}
-    EOF
+    name = "cilium"
+    contents = join("\n---\n", compact([
+      local.cilium_ipsec_keys_manifest != null ? yamlencode(local.cilium_ipsec_keys_manifest) : "",
+      data.helm_template.cilium.manifest,
+    ]))
   } : null
 }

@@ -598,7 +598,7 @@ variable "cluster_autoscaler_helm_chart" {
 
 variable "cluster_autoscaler_helm_version" {
   type        = string
-  default     = "9.53.0"
+  default     = "9.57.0"
   description = "Version of the Cluster Autoscaler Helm chart to deploy."
 }
 
@@ -616,7 +616,7 @@ variable "cluster_autoscaler_enabled" {
 
 variable "cluster_autoscaler_image_tag" {
   type        = string
-  default     = "v1.34.5"
+  default     = "v1.36.0"
   description = "Version of the Cluster Autoscaler Image."
 }
 
@@ -851,7 +851,7 @@ variable "talos_cloud_arm64_image_selector" {
 # Talos
 variable "talos_version" {
   type        = string
-  default     = "v1.13.10" # https://github.com/siderolabs/talos
+  default     = "v1.14.1" # https://github.com/siderolabs/talos
   description = "Specifies the version of Talos to be used in generated machine configurations."
 }
 
@@ -980,6 +980,12 @@ variable "talos_machine_configuration_apply_mode" {
     condition     = contains(["auto", "reboot", "no_reboot", "staged", "staged_if_needing_reboot"], var.talos_machine_configuration_apply_mode)
     error_message = "The talos_machine_configuration_apply_mode must be 'auto', 'reboot', 'no_reboot', 'staged', or 'staged_if_needing_reboot'."
   }
+}
+
+variable "talos_synchronize_manifests_enabled" {
+  type        = bool
+  default     = true
+  description = "Gate every `talosctl upgrade-k8s` invocation: both `terraform_data.upgrade_kubernetes` (Kubernetes version bumps) and `terraform_data.synchronize_manifests` (inline-manifest re-sync). Set to false to skip both — useful when talosctl's SSA Apply path hits bugs (v0.2.36 nil panic, v0.2.37 'unexpected object' on adopted resources). Bootstrap-time manifest apply is unaffected; only post-install changes that depend on `talosctl upgrade-k8s` are skipped."
 }
 
 variable "talos_staged_configuration_automatic_reboot_enabled" {
@@ -1272,7 +1278,7 @@ variable "talos_backup_schedule" {
 # Kubernetes
 variable "kubernetes_version" {
   type        = string
-  default     = "v1.34.11" # https://github.com/kubernetes/kubernetes
+  default     = "v1.36.3" # https://github.com/kubernetes/kubernetes
   description = "Specifies the Kubernetes version to deploy."
 }
 
@@ -1362,6 +1368,24 @@ variable "kube_api_hostname" {
   description = "Specifies the hostname for external access to the Kubernetes API server. This must be a valid domain name, set to the API's public IP address."
 }
 
+variable "kube_api_extra_certificate_sans" {
+  type        = list(string)
+  default     = []
+  description = "Extra SANs (IPs or hostnames) to include in the Kubernetes API server certificate. Use this to add Tailscale IPs, alternate hostnames, or any address you want kubectl to validate against."
+}
+
+variable "talos_extra_certificate_sans" {
+  type        = list(string)
+  default     = []
+  description = "Extra SANs (IPs or hostnames) to include in the Talos API server certificate. Use this to add Tailscale IPs or any address you want talosctl/terraform to connect to over TLS."
+}
+
+variable "talos_endpoint_override" {
+  type        = list(string)
+  default     = null
+  description = "If set, replaces the auto-derived Talos API endpoints (public/private IPs) used by the talos Terraform provider during apply. Useful for routing apply traffic over Tailscale or a private network. The first entry is used as the primary endpoint; the full list is used as the endpoints list. Cert SANs for these addresses must be added via talos_extra_certificate_sans."
+}
+
 variable "kube_api_load_balancer_enabled" {
   type        = bool
   default     = false
@@ -1378,6 +1402,22 @@ variable "kube_api_extra_args" {
   type        = map(string)
   default     = {}
   description = "Specifies additional command-line arguments to be passed to the kube-apiserver. This allows for customization of the API server's behavior according to specific cluster requirements."
+}
+
+variable "kube_api_env" {
+  type        = map(string)
+  default     = {}
+  description = <<-EOT
+    Environment variables for the kube-apiserver container (.cluster.apiServer.env).
+    The main use is GOMEMLIMIT: kube-apiserver is a Go program with no memory limit
+    by default, so its GC lets the heap grow to roughly twice the live set before
+    collecting. On a small control plane that is the difference between ~500 MiB of
+    live objects and >1 GiB of resident memory. GOMEMLIMIT is a SOFT limit — the GC
+    collects harder as it approaches it and never OOM-kills the process — unlike a
+    cgroup memory limit, which would.
+    Keep it comfortably above the live heap (go_memstats_heap_alloc_bytes); a limit
+    near the live set trades memory for GC CPU burn.
+  EOT
 }
 
 
@@ -1976,7 +2016,7 @@ variable "cilium_bpf_datapath_mode" {
 
 variable "cilium_gateway_api_enabled" {
   type        = bool
-  default     = false
+  default     = true
   description = "Enables Cilium Gateway API."
 }
 
@@ -2084,6 +2124,54 @@ variable "metrics_server_replicas" {
   type        = number
   default     = null
   description = "Specifies the number of replicas for the Metrics Server. Depending on the node pool size, a default of 1 or 2 is used if not explicitly set."
+}
+
+
+# Kubelet CSR Approver
+# Auto-approves `kubernetes.io/kubelet-serving` CSRs from legitimate node
+# identities. Without it, kubelet serving certs (Talos sets
+# rotate-server-certificates=true) sit Pending forever and any kubectl logs /
+# exec / metrics-server scrape against :10250 fails with "tls: internal error".
+variable "kubelet_csr_approver_enabled" {
+  type        = bool
+  default     = true
+  description = "Auto-approve kubelet-serving CSRs via postfinance/kubelet-csr-approver. Required for kubectl logs/exec/top to work when Talos rotates kubelet server certificates."
+}
+
+variable "kubelet_csr_approver_helm_repository" {
+  type        = string
+  default     = "https://postfinance.github.io/kubelet-csr-approver"
+  description = "Helm repository URL for the kubelet-csr-approver chart."
+}
+
+variable "kubelet_csr_approver_helm_chart" {
+  type        = string
+  default     = "kubelet-csr-approver"
+  description = "Helm chart name for kubelet-csr-approver."
+}
+
+variable "kubelet_csr_approver_helm_version" {
+  type        = string
+  default     = "1.2.4"
+  description = "Version of the kubelet-csr-approver Helm chart to deploy."
+}
+
+variable "kubelet_csr_approver_helm_values" {
+  type        = any
+  default     = {}
+  description = "Extra helm values merged on top of the module defaults."
+}
+
+variable "kubelet_csr_approver_provider_regex" {
+  type        = string
+  default     = null
+  description = "Regex the kubelet's CSR CommonName must match for auto-approval. Defaults to '^<cluster_name>-.+$' which covers every node in this cluster."
+}
+
+variable "kubelet_csr_approver_provider_ip_prefixes" {
+  type        = list(string)
+  default     = null
+  description = "CIDRs that node IPs in the CSR must fall within. Defaults to [network_ipv4_cidr]. Set to an empty list to disable the IP prefix check."
 }
 
 

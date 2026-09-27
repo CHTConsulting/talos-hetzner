@@ -12,14 +12,21 @@ locals {
   talos_primary_node_public_ipv6  = hcloud_server.control_plane[local.talos_primary_node_name].ipv6_address
 
   # Talos API
-  talos_api_port = 50000
-  talos_primary_endpoint = var.cluster_access == "private" ? local.talos_primary_node_private_ipv4 : coalesce(
-    local.talos_primary_node_public_ipv4, local.talos_primary_node_public_ipv6
+  talos_api_port                  = 50000
+  talos_endpoint_override_enabled = var.talos_endpoint_override != null && length(coalesce(var.talos_endpoint_override, [])) > 0
+  talos_primary_endpoint = (
+    local.talos_endpoint_override_enabled ? var.talos_endpoint_override[0] :
+    var.cluster_access == "private" ? local.talos_primary_node_private_ipv4 : coalesce(
+      local.talos_primary_node_public_ipv4, local.talos_primary_node_public_ipv6
+    )
   )
-  talos_endpoints = compact(
-    var.cluster_access == "private" ? local.control_plane_private_ipv4_list : concat(
-      local.network_public_ipv4_enabled ? local.control_plane_public_ipv4_list : [],
-      local.network_public_ipv6_enabled ? local.control_plane_public_ipv6_list : []
+  talos_endpoints = (
+    local.talos_endpoint_override_enabled ? var.talos_endpoint_override :
+    compact(
+      var.cluster_access == "private" ? local.control_plane_private_ipv4_list : concat(
+        local.network_public_ipv4_enabled ? local.control_plane_public_ipv4_list : [],
+        local.network_public_ipv6_enabled ? local.control_plane_public_ipv6_list : []
+      )
     )
   )
 
@@ -267,7 +274,9 @@ resource "terraform_data" "upgrade_kubernetes" {
   provisioner "local-exec" {
     when  = create
     quiet = true
-    command = join("\n",
+    command = !var.talos_synchronize_manifests_enabled ? (
+      "printf '%s\\n' 'Kubernetes upgrade via talosctl upgrade-k8s disabled (talos_synchronize_manifests_enabled = false); kubernetes_version change recorded in state but not applied to cluster.'"
+      ) : join("\n",
       [
         "set -eu",
         local.cluster_initialized ? join("\n",
@@ -563,7 +572,9 @@ resource "terraform_data" "synchronize_manifests" {
   provisioner "local-exec" {
     when  = create
     quiet = true
-    command = join("\n",
+    command = !var.talos_synchronize_manifests_enabled ? (
+      "printf '%s\\n' 'Manifest synchronization disabled via talos_synchronize_manifests_enabled = false; skipping talosctl upgrade-k8s.'"
+      ) : join("\n",
       [
         "set -eu",
         local.cluster_initialized ? join("\n",

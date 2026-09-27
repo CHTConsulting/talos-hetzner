@@ -182,6 +182,12 @@ data "helm_template" "hcloud_csi" {
         ]
         volumeExtraLabels = var.hcloud_csi_volume_extra_labels
       }
+      metrics = {
+        enabled = true
+        serviceMonitor = {
+          enabled = true
+        }
+      }
       storageClasses = local.hcloud_csi_storage_classes
     }),
     yamlencode(var.hcloud_csi_helm_values)
@@ -190,11 +196,10 @@ data "helm_template" "hcloud_csi" {
 
 locals {
   hcloud_csi_manifest = var.hcloud_csi_enabled ? {
-    name     = "hcloud-csi"
-    contents = <<-EOF
-      ${yamlencode(local.hcloud_csi_secret_manifest)}
-      ---
-      ${data.helm_template.hcloud_csi[0].manifest}
-    EOF
+    name = "hcloud-csi"
+    contents = join("\n---\n", compact([
+      local.hcloud_csi_secret_manifest != null ? yamlencode(local.hcloud_csi_secret_manifest) : "",
+      data.helm_template.hcloud_csi[0].manifest,
+    ]))
   } : null
 }

@@ -10,8 +10,11 @@ locals {
   } : {}
 
   # Kubernetes Manifests for Talos
+  # kubelet-csr-approver goes early so kubelet serving certs are signed before
+  # anything scrapes :10250 (metrics-server, Hubble).
   talos_inline_manifests = concat(
     [local.hcloud_secret_manifest],
+    local.kubelet_csr_approver_manifest != null ? [local.kubelet_csr_approver_manifest] : [],
     local.cilium_manifest != null ? [local.cilium_manifest] : [],
     local.talos_ccm_manifest != null ? [local.talos_ccm_manifest] : [],
     local.hcloud_ccm_manifest != null ? [local.hcloud_ccm_manifest] : [],
@@ -94,6 +97,9 @@ locals {
               },
               var.kubernetes_apiserver_image != null ? {
                 image = "${var.kubernetes_apiserver_image}:${var.kubernetes_version}"
+              } : {},
+              length(var.kube_api_env) > 0 ? {
+                env = var.kube_api_env
               } : {}
             )
             controllerManager = merge(

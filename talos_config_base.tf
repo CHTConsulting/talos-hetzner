@@ -20,6 +20,9 @@ locals {
           # Other Addresses
           [var.kube_api_hostname],
           ["127.0.0.1", "::1", "localhost"],
+          # User-supplied extras (e.g., Tailscale IPs, alternate hostnames)
+          var.talos_extra_certificate_sans,
+          var.kube_api_extra_certificate_sans,
         )
       )
     )

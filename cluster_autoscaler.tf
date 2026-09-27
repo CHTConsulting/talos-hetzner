@@ -136,11 +136,10 @@ data "helm_template" "cluster_autoscaler" {
 
 locals {
   cluster_autoscaler_manifest = var.cluster_autoscaler_enabled ? {
-    name     = "cluster-autoscaler"
-    contents = <<-EOF
-      ${data.helm_template.cluster_autoscaler[0].manifest}
-      ---
-      ${yamlencode(local.cluster_autoscaler_cluster_config_manifest)}
-    EOF
+    name = "cluster-autoscaler"
+    contents = join("\n---\n", compact([
+      data.helm_template.cluster_autoscaler[0].manifest,
+      local.cluster_autoscaler_cluster_config_manifest != null ? yamlencode(local.cluster_autoscaler_cluster_config_manifest) : "",
+    ]))
   } : null
 }

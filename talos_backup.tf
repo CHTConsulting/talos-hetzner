@@ -52,19 +52,23 @@ locals {
                 image           = "ghcr.io/siderolabs/talos-backup:${var.talos_backup_version}"
                 workingDir      = "/tmp"
                 imagePullPolicy = "IfNotPresent"
-                env = [
-                  { name = "AWS_ACCESS_KEY_ID", valueFrom = { secretKeyRef = { name = "talos-backup-s3-secrets", key = "access_key" } } },
-                  { name = "AWS_SECRET_ACCESS_KEY", valueFrom = { secretKeyRef = { name = "talos-backup-s3-secrets", key = "secret_key" } } },
-                  { name = "AGE_X25519_PUBLIC_KEY", value = var.talos_backup_age_x25519_public_key },
-                  { name = "DISABLE_ENCRYPTION", value = tostring(var.talos_backup_age_x25519_public_key == null) },
-                  { name = "AWS_REGION", value = local.talos_backup_s3_region },
-                  { name = "CUSTOM_S3_ENDPOINT", value = local.talos_backup_s3_endpoint },
-                  { name = "BUCKET", value = local.talos_backup_s3_bucket },
-                  { name = "CLUSTER_NAME", value = var.cluster_name },
-                  { name = "S3_PREFIX", value = var.talos_backup_s3_prefix },
-                  { name = "USE_PATH_STYLE", value = tostring(var.talos_backup_s3_path_style) },
-                  { name = "ENABLE_COMPRESSION", value = tostring(var.talos_backup_enable_compression) }
-                ]
+                # env[*].value must be a string: a null would render as `value: null`
+                # and crash Talos's SSA apply, so optional entries are dropped instead.
+                env = concat(
+                  [
+                    { name = "AWS_ACCESS_KEY_ID", valueFrom = { secretKeyRef = { name = "talos-backup-s3-secrets", key = "access_key" } } },
+                    { name = "AWS_SECRET_ACCESS_KEY", valueFrom = { secretKeyRef = { name = "talos-backup-s3-secrets", key = "secret_key" } } },
+                    { name = "DISABLE_ENCRYPTION", value = tostring(var.talos_backup_age_x25519_public_key == null) },
+                    { name = "CLUSTER_NAME", value = var.cluster_name },
+                    { name = "USE_PATH_STYLE", value = tostring(var.talos_backup_s3_path_style) },
+                    { name = "ENABLE_COMPRESSION", value = tostring(var.talos_backup_enable_compression) },
+                  ],
+                  var.talos_backup_age_x25519_public_key != null ? [{ name = "AGE_X25519_PUBLIC_KEY", value = var.talos_backup_age_x25519_public_key }] : [],
+                  local.talos_backup_s3_region != null ? [{ name = "AWS_REGION", value = local.talos_backup_s3_region }] : [],
+                  local.talos_backup_s3_endpoint != null ? [{ name = "CUSTOM_S3_ENDPOINT", value = local.talos_backup_s3_endpoint }] : [],
+                  local.talos_backup_s3_bucket != null ? [{ name = "BUCKET", value = local.talos_backup_s3_bucket }] : [],
+                  var.talos_backup_s3_prefix != null ? [{ name = "S3_PREFIX", value = var.talos_backup_s3_prefix }] : [],
+                )
                 volumeMounts = [
                   { name = "tmp", mountPath = "/tmp" },
                   { name = "talos-secrets", mountPath = "/var/run/secrets/talos.dev" }
@@ -98,13 +102,11 @@ locals {
   }
 
   talos_backup_manifest = var.talos_backup_enabled ? {
-    name     = "talos-backup"
-    contents = <<-EOF
-      ${yamlencode(local.talos_backup_service_account)}
-      ---
-      ${yamlencode(local.talos_backup_s3_secrets)}
-      ---
-      ${yamlencode(local.talos_backup_cronjob)}
-    EOF
+    name = "talos-backup"
+    contents = join("\n---\n", compact([
+      local.talos_backup_service_account != null ? yamlencode(local.talos_backup_service_account) : "",
+      local.talos_backup_s3_secrets != null ? yamlencode(local.talos_backup_s3_secrets) : "",
+      local.talos_backup_cronjob != null ? yamlencode(local.talos_backup_cronjob) : "",
+    ]))
   } : null
 }

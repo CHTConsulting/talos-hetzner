@@ -32,7 +32,7 @@ locals {
 
   rbac_manifest = length(local.rbac_manifests) > 0 ? {
     name     = "kube-rbac"
-    contents = join("\n---\n", local.rbac_manifests)
+    contents = join("\n---\n", compact(local.rbac_manifests))
   } : null
 }
 

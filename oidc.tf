@@ -79,6 +79,6 @@ locals {
   # Final manifest
   oidc_manifest = length(local.oidc_manifests) > 0 ? {
     name     = "kube-oidc-rbac"
-    contents = join("\n---\n", local.oidc_manifests)
+    contents = join("\n---\n", compact(local.oidc_manifests))
   } : null
 }

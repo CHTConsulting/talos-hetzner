@@ -118,3 +118,13 @@ output "subnet_router" {
     location     = local.subnet_router_location
   } : null
 }
+
+output "kube_api_host" {
+  description = "Kubernetes API host (IP or hostname) the module exposes for client config. Resolves to a private IP when cluster_access = \"private\". Use this in your kubernetes/flux provider config so the host stays in sync with the module."
+  value       = local.kube_api_host
+}
+
+output "kube_api_url" {
+  description = "Full Kubernetes API URL (https://<host>:<port>). Convenience wrapper around kube_api_host."
+  value       = local.kube_api_url_external
+}
