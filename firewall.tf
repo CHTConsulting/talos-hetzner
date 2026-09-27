@@ -362,6 +362,24 @@ locals {
         port        = local.talos_api_port
       }
     ] : [],
+    var.subnet_router_enabled ? [
+      {
+        description = "Tailscale direct peer-to-peer (subnet router)"
+        direction   = "in"
+        source_ips  = ["0.0.0.0/0", "::/0"]
+        protocol    = "udp"
+        port        = tostring(41641)
+      }
+    ] : [],
+    var.subnet_router_enabled && var.subnet_router_ssh_enabled ? [
+      {
+        description = "SSH to subnet router (debug, operator current IP)"
+        direction   = "in"
+        source_ips  = ["${chomp(data.http.subnet_router_ssh_current_ipv4[0].response_body)}/32"]
+        protocol    = "tcp"
+        port        = "22"
+      }
+    ] : [],
   )
 
   firewall_rules = {
@@ -401,6 +419,26 @@ locals {
 
 data "http" "current_ipv4" {
   count = local.current_ipv4_lookup_required ? 1 : 0
+  url   = "https://ipv4.icanhazip.com"
+
+  retry {
+    attempts     = 10
+    min_delay_ms = 1000
+    max_delay_ms = 1000
+  }
+
+  lifecycle {
+    postcondition {
+      condition     = contains([200], self.status_code)
+      error_message = "HTTP status code invalid"
+    }
+  }
+}
+
+# Separate from current_ipv4 so enabling subnet_router_ssh doesn't pull the
+# operator IP into kube/talos API firewall sources.
+data "http" "subnet_router_ssh_current_ipv4" {
+  count = var.subnet_router_enabled && var.subnet_router_ssh_enabled ? 1 : 0
   url   = "https://ipv4.icanhazip.com"
 
   retry {

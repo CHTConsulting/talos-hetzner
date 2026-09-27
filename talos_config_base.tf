@@ -36,7 +36,13 @@ locals {
   # Routes
   # Note: Default route (0.0.0.0/0) omits the 'network' key per Talos routing config requirements
   # See https://github.com/siderolabs/talos/issues/12521
-  talos_extra_routes = [for cidr in var.talos_extra_routes : merge(
+  # Egress through the subnet router needs a default route via the network
+  # gateway; the Hetzner network's own 0.0.0.0/0 route then forwards to the router.
+  talos_extra_route_cidrs = distinct(concat(
+    var.talos_extra_routes,
+    var.cluster_egress_via_subnet_router ? ["0.0.0.0/0"] : []
+  ))
+  talos_extra_routes = [for cidr in local.talos_extra_route_cidrs : merge(
     {
       gateway = local.network_ipv4_gateway
       metric  = 512

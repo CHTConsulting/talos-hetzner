@@ -110,6 +110,10 @@ resource "hcloud_network_subnet" "control_plane" {
   network_zone = local.hcloud_network_zone
 
   ip_range = local.network_control_plane_ipv4_cidr
+
+  # Serialize against the subnet_router subnet to avoid Hetzner's concurrent-
+  # subnet-creation race that spuriously reports "ip range overlaps".
+  depends_on = [hcloud_network_subnet.subnet_router]
 }
 
 resource "hcloud_network_subnet" "load_balancer" {
@@ -118,6 +122,8 @@ resource "hcloud_network_subnet" "load_balancer" {
   network_zone = local.hcloud_network_zone
 
   ip_range = local.network_load_balancer_ipv4_cidr
+
+  depends_on = [hcloud_network_subnet.control_plane]
 }
 
 resource "hcloud_network_subnet" "worker_shared" {
@@ -126,6 +132,8 @@ resource "hcloud_network_subnet" "worker_shared" {
   network_zone = local.hcloud_network_zone
 
   ip_range = local.network_worker_shared_ipv4_cidr
+
+  depends_on = [hcloud_network_subnet.load_balancer]
 }
 
 resource "hcloud_network_subnet" "worker" {
@@ -135,6 +143,8 @@ resource "hcloud_network_subnet" "worker" {
   type         = "cloud"
   network_zone = local.hcloud_network_zone
   ip_range     = each.value.subnet
+
+  depends_on = [hcloud_network_subnet.worker_shared]
 }
 
 resource "hcloud_network_subnet" "cluster_autoscaler_shared" {
@@ -161,6 +171,8 @@ resource "hcloud_network_subnet" "cluster_autoscaler" {
   type         = "cloud"
   network_zone = local.hcloud_network_zone
   ip_range     = each.value.subnet
+
+  depends_on = [hcloud_network_subnet.worker]
 }
 
 resource "hcloud_network_subnet" "bare_metal_shared" {

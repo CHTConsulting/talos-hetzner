@@ -108,3 +108,13 @@ output "kube_api_load_balancer" {
     private_ipv4 = local.kube_api_load_balancer_private_ipv4
   } : null
 }
+
+output "subnet_router" {
+  description = "Tailscale subnet router VM info (null when subnet_router_enabled = false)."
+  value = var.subnet_router_enabled ? {
+    name         = hcloud_server.subnet_router[0].name
+    public_ipv4  = hcloud_server.subnet_router[0].ipv4_address
+    private_ipv4 = local.subnet_router_ipv4
+    location     = local.subnet_router_location
+  } : null
+}

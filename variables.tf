@@ -713,6 +713,73 @@ variable "cluster_autoscaler_cleanup_enabled" {
 }
 
 
+# Subnet Router (Tailscale)
+variable "subnet_router_enabled" {
+  type        = bool
+  default     = false
+  description = "Provision a small Hetzner VM in the cluster's private network running Tailscale as a subnet router. Advertises the network CIDR into your tailnet so operators / CI can reach private cluster IPs over WireGuard without exposing the cluster API publicly. Typically paired with cluster_access = \"private\" and firewall_use_current_ipv4 = false."
+}
+
+variable "subnet_router_tailscale_authkey" {
+  type        = string
+  default     = null
+  sensitive   = true
+  description = "Tailscale pre-auth key for the subnet router VM. Required when subnet_router_enabled = true. The key's tag should be configured under autoApprovers for the network CIDR in your Tailscale ACL so the route is approved without manual UI action."
+
+  validation {
+    condition     = var.subnet_router_enabled == false || var.subnet_router_tailscale_authkey != null
+    error_message = "subnet_router_tailscale_authkey is required when subnet_router_enabled = true."
+  }
+}
+
+variable "subnet_router_server_type" {
+  type        = string
+  default     = "cx23"
+  description = "Hetzner server type for the subnet router VM. cx23 is sufficient for routing small/medium clusters; bump up if your NAT egress bandwidth saturates."
+}
+
+variable "subnet_router_location" {
+  type        = string
+  default     = null
+  description = "Hetzner location for the subnet router VM. Defaults to the location of the first control_plane nodepool when null."
+}
+
+variable "subnet_router_image" {
+  type        = string
+  default     = "ubuntu-24.04"
+  description = "OS image for the subnet router VM. Defaults to Ubuntu 24.04 LTS — broadly tested, ships apt + systemd that the default cloud-init script targets. If you override with a non-Debian/Ubuntu image you'll need to adjust the bootstrap commands."
+}
+
+variable "subnet_router_ssh_enabled" {
+  type        = bool
+  default     = false
+  description = "If true, open TCP/22 on the cluster firewall to the operator's current public IP (auto-detected via icanhazip). The SSH key is always attached to the router VM — this only controls the firewall rule. Useful for cloud-init debugging when Tailscale isn't up yet."
+}
+
+variable "subnet_router_ipv4" {
+  type        = string
+  default     = null
+  description = "Static private IPv4 for the subnet router VM. When null (default), uses .10 of subnet_router_subnet_ipv4_cidr."
+}
+
+variable "subnet_router_subnet_ipv4_cidr" {
+  type        = string
+  default     = null
+  description = "Dedicated subnet CIDR for the subnet router VM, carved from network_ipv4_cidr. When null (default), uses the first /24 of network_ipv4_cidr (e.g., 10.0.0.0/24 for default network, 10.1.0.0/24 for 10.1.0.0/16). Must not overlap with network_node_ipv4_cidr."
+}
+
+variable "cluster_egress_via_subnet_router" {
+  type        = bool
+  default     = false
+  description = "Route all cluster node egress (0.0.0.0/0) through the subnet router VM (which performs NAT masquerade). Use this for fully-private clusters where nodes have no public IPv4 of their own. Requires subnet_router_enabled = true. The subnet router becomes a SPOF for cluster egress — if it dies, image pulls and outbound traffic stop until it's recovered."
+
+  validation {
+    condition     = var.cluster_egress_via_subnet_router == false || var.subnet_router_enabled
+    error_message = "cluster_egress_via_subnet_router requires subnet_router_enabled = true."
+  }
+}
+
+
 # Packer
 variable "packer_amd64_builder" {
   type = object({
@@ -948,7 +1015,12 @@ variable "talos_ipv6_enabled" {
 variable "talos_public_ipv4_enabled" {
   type        = bool
   default     = true
-  description = "Determines whether public IPv4 addresses are enabled for nodes the cluster. If true, each node is assigned a public IPv4 address."
+  description = "Determines whether public IPv4 addresses are enabled for nodes the cluster. If true, each node is assigned a public IPv4 address. Set to false for fully-private clusters, in which case cluster_egress_via_subnet_router must be true so nodes have an egress path."
+
+  validation {
+    condition     = var.talos_public_ipv4_enabled || var.cluster_egress_via_subnet_router
+    error_message = "When talos_public_ipv4_enabled = false, cluster_egress_via_subnet_router must be true so nodes can reach the internet for image pulls. Otherwise nodes won't bootstrap."
+  }
 }
 
 variable "talos_public_ipv6_enabled" {

@@ -64,7 +64,9 @@ resource "hcloud_server" "control_plane" {
   depends_on = [
     terraform_data.hcloud_server_cluster_autoscaler,
     hcloud_network_subnet.control_plane,
-    hcloud_placement_group.control_plane
+    hcloud_placement_group.control_plane,
+    hcloud_server.subnet_router,
+    hcloud_network_route.egress
   ]
 
   lifecycle {
@@ -131,7 +133,9 @@ resource "hcloud_server" "worker" {
     terraform_data.hcloud_server_cluster_autoscaler,
     hcloud_network_subnet.worker_shared,
     hcloud_network_subnet.worker,
-    hcloud_placement_group.worker
+    hcloud_placement_group.worker,
+    hcloud_server.subnet_router,
+    hcloud_network_route.egress
   ]
 
   lifecycle {
