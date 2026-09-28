@@ -22,6 +22,18 @@ locals {
   subnet_router_user_data = <<-EOT
     #cloud-config
     write_files:
+      # Ubuntu images do not bring up the private-network NIC on their own;
+      # without it the router advertises a network it cannot reach.
+      - path: /etc/netplan/60-hcloud-private.yaml
+        permissions: '0600'
+        content: |
+          network:
+            version: 2
+            ethernets:
+              hcloud-private:
+                match:
+                  name: "en*"
+                dhcp4: true
       - path: /etc/systemd/system/subnet-router-nat.service
         content: |
           [Unit]
@@ -44,6 +56,12 @@ locals {
           set -euxo pipefail
 
           echo "=== $(date -u +%FT%TZ) starting subnet-router bootstrap ==="
+
+          # Private network NIC (netplan file above), then wait for its lease
+          netplan apply
+          for i in $(seq 1 30); do
+            ip -4 addr show | grep -q 'inet ${local.subnet_router_ipv4}/' && break || sleep 1
+          done
 
           # IP forwarding
           cat > /etc/sysctl.d/99-tailscale.conf <<'SYSCTL'
@@ -114,6 +132,12 @@ resource "hcloud_server" "subnet_router" {
   }
 
   depends_on = [hcloud_network_subnet.subnet_router]
+
+  # cloud-init only runs at first boot, so a changed script would do nothing
+  # but replace a running router and cut the tailnet path and cluster egress.
+  lifecycle {
+    ignore_changes = [user_data, image]
+  }
 }
 
 # Route 0.0.0.0/0 through the subnet router for fully-private clusters. The
