@@ -117,6 +117,15 @@ data "helm_template" "cilium" {
         peerService = {
           clusterDomain = var.cluster_domain
         }
+        # The default method=helm mints a new CA and certs on every render, so
+        # each plan saw changed inline manifests and re-applied the control
+        # plane config. cronJob generates them in-cluster; the render is stable.
+        tls = {
+          auto = {
+            enabled = true
+            method  = "cronJob"
+          }
+        }
       }
       prometheus = {
         enabled = true
