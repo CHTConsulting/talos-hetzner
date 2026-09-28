@@ -8,12 +8,22 @@ output "kubeconfig" {
   description = "Raw kubeconfig file for authenticating with the Kubernetes cluster."
   value       = local.kubeconfig
   sensitive   = true
+
+  # Consumers (kubernetes/flux/helm providers) must not start before the API
+  # answers; with cluster_healthcheck_enabled these wait for it, without they
+  # resolve immediately (the data sources then have count 0).
+  depends_on = [data.http.kube_api_health, data.talos_cluster_health.this]
 }
 
 output "kubeconfig_data" {
   description = "Structured kubeconfig data, suitable for use with other Terraform providers or tools."
   value       = local.kubeconfig_data
   sensitive   = true
+
+  # Consumers (kubernetes/flux/helm providers) must not start before the API
+  # answers; with cluster_healthcheck_enabled these wait for it, without they
+  # resolve immediately (the data sources then have count 0).
+  depends_on = [data.http.kube_api_health, data.talos_cluster_health.this]
 }
 
 output "talosconfig_data" {
@@ -122,9 +132,19 @@ output "subnet_router" {
 output "kube_api_host" {
   description = "Kubernetes API host (IP or hostname) the module exposes for client config. Resolves to a private IP when cluster_access = \"private\". Use this in your kubernetes/flux provider config so the host stays in sync with the module."
   value       = local.kube_api_host
+
+  # Consumers (kubernetes/flux/helm providers) must not start before the API
+  # answers; with cluster_healthcheck_enabled these wait for it, without they
+  # resolve immediately (the data sources then have count 0).
+  depends_on = [data.http.kube_api_health, data.talos_cluster_health.this]
 }
 
 output "kube_api_url" {
   description = "Full Kubernetes API URL (https://<host>:<port>). Convenience wrapper around kube_api_host."
   value       = local.kube_api_url_external
+
+  # Consumers (kubernetes/flux/helm providers) must not start before the API
+  # answers; with cluster_healthcheck_enabled these wait for it, without they
+  # resolve immediately (the data sources then have count 0).
+  depends_on = [data.http.kube_api_health, data.talos_cluster_health.this]
 }
