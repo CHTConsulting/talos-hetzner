@@ -25,6 +25,10 @@ Terraform module that deploys a Talos Linux Kubernetes cluster on Hetzner Cloud.
 >   it patches the new documents. Not available on 1.14:
 >   `talos_kubelet_extra_mounts` and `talos_discovery_kubernetes_enabled`
 >   (no replacement document; the plan fails with an explanation).
+>   `tests/talos-config/run.sh` renders the control-plane, worker and
+>   autoscaler configs for both versions offline (real talos provider, mocked
+>   hcloud), runs `talosctl validate` on each, and fails if the 1.13 output
+>   drifts from a base git ref.
 >
 > Attribution and the full list of changes: [NOTICE.md](NOTICE.md). The
 > documentation below comes from upstream and still describes the module
