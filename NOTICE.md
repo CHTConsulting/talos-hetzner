@@ -31,7 +31,12 @@ Added or changed relative to upstream:
 - Inline manifests are joined without empty documents, so a disabled part
   never renders a literal `null` YAML document that crashes
   `talosctl upgrade-k8s`.
-- Defaults: Talos v1.14.1 (talos provider 0.12.0), Kubernetes v1.36.3 with a
+- Talos 1.14 support: from `talos_version` 1.14 on, the machine configuration
+  patches target the new per-component documents (`KubeletConfig`,
+  `KubeNodeConfig`, `KubeNetworkConfig`, `KubeAPIServerConfig`,
+  `UnattendedInstallConfig`, ...) instead of the deprecated `v1alpha1` fields;
+  1.13 keeps the `v1alpha1` patches unchanged.
+- Defaults: Talos v1.13.10 (talos provider 0.12.0), Kubernetes v1.36.3 with a
   matching Cluster Autoscaler, Cilium Gateway API enabled.
 
 The upstream README (`README.md`) documents the module's full surface; the

@@ -17,6 +17,14 @@ Terraform module that deploys a Talos Linux Kubernetes cluster on Hetzner Cloud.
 >   tailnet.
 > - **`kube_api_env`** — environment variables for kube-apiserver (mainly
 >   `GOMEMLIMIT` on small control planes).
+> - **Talos 1.13 and 1.14 from one module.** Talos 1.14 moved the Kubernetes
+>   settings out of the `v1alpha1` document into dedicated documents
+>   (`KubeletConfig`, `KubeNodeConfig`, `KubeNetworkConfig`, ...) and rejects a
+>   config that sets both. The module picks the format from `talos_version`:
+>   below 1.14 it renders the same `v1alpha1` patches as before, from 1.14 on
+>   it patches the new documents. Not available on 1.14:
+>   `talos_kubelet_extra_mounts` and `talos_discovery_kubernetes_enabled`
+>   (no replacement document; the plan fails with an explanation).
 >
 > Attribution and the full list of changes: [NOTICE.md](NOTICE.md). The
 > documentation below comes from upstream and still describes the module

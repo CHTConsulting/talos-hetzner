@@ -23,7 +23,7 @@ locals {
     ) : null
   }
 
-  bare_metal_talos_config_patches = {
+  bare_metal_network_config_patches = {
     for server_name, server in local.bare_metal_servers : server_name => [
       {
         apiVersion = "v1alpha1"
@@ -78,46 +78,78 @@ locals {
           local.bare_metal_extra_routes
         )
       },
+    ]
+  }
+
+  bare_metal_node_labels = {
+    for server_name, server in local.bare_metal_servers : server_name => merge(
+      local.bare_metal_nodepools_map[server.nodepool].labels,
       {
-        machine = {
-          nodeLabels = merge(
-            local.bare_metal_nodepools_map[server.nodepool].labels,
-            {
-              "nodeid"                             = tostring(server.number),
-              "instance.hetzner.cloud/provided-by" = "robot"
-            }
-          )
-          nodeAnnotations = local.bare_metal_nodepools_map[server.nodepool].annotations
-          kubelet = {
-            extraArgs = {
-              "provider-id" = "hrobot://${server.number}"
-            }
-            extraConfig = merge(
-              {
-                registerWithTaints = local.bare_metal_nodepools_map[server.nodepool].taints
-                systemReserved = {
-                  cpu               = "100m"
-                  memory            = "300Mi"
-                  ephemeral-storage = "1Gi"
-                }
-                kubeReserved = {
-                  cpu               = "100m"
-                  memory            = "350Mi"
-                  ephemeral-storage = "1Gi"
-                }
-              },
-              var.kubernetes_kubelet_extra_config
-            )
-          }
+        "nodeid"                             = tostring(server.number),
+        "instance.hetzner.cloud/provided-by" = "robot"
+      }
+    )
+  }
+  bare_metal_kubelet_extra_args = {
+    for server_name, server in local.bare_metal_servers : server_name => {
+      "provider-id" = "hrobot://${server.number}"
+    }
+  }
+  bare_metal_kubelet_config = {
+    for server_name, server in local.bare_metal_servers : server_name => merge(
+      {
+        registerWithTaints = local.bare_metal_nodepools_map[server.nodepool].taints
+        systemReserved = {
+          cpu               = "100m"
+          memory            = "300Mi"
+          ephemeral-storage = "1Gi"
+        }
+        kubeReserved = {
+          cpu               = "100m"
+          memory            = "350Mi"
+          ephemeral-storage = "1Gi"
         }
       },
-      {
+      var.kubernetes_kubelet_extra_config
+    )
+  }
+
+  bare_metal_talos_config_patches = {
+    for server_name, server in local.bare_metal_servers : server_name => concat(
+      local.bare_metal_network_config_patches[server_name],
+      # Talos >= 1.14
+      [for p in [
+        {
+          apiVersion  = "v1alpha1"
+          kind        = "KubeNodeConfig"
+          labels      = local.bare_metal_node_labels[server_name]
+          annotations = local.bare_metal_nodepools_map[server.nodepool].annotations
+        },
+        {
+          apiVersion = "v1alpha1"
+          kind       = "KubeletConfig"
+          extraArgs  = local.bare_metal_kubelet_extra_args[server_name]
+          config     = local.bare_metal_kubelet_config[server_name]
+        }
+      ] : p if local.talos_config_documents],
+      # Talos < 1.14
+      [for p in [{
+        machine = {
+          nodeLabels      = local.bare_metal_node_labels[server_name]
+          nodeAnnotations = local.bare_metal_nodepools_map[server.nodepool].annotations
+          kubelet = {
+            extraArgs   = local.bare_metal_kubelet_extra_args[server_name]
+            extraConfig = local.bare_metal_kubelet_config[server_name]
+          }
+        }
+      }] : p if !local.talos_config_documents],
+      [{
         apiVersion = "v1alpha1"
         kind       = "HostnameConfig"
         hostname   = server.name
         auto       = "off"
-      }
-    ]
+      }]
+    )
   }
 }
 

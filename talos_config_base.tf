@@ -179,15 +179,19 @@ locals {
     if var.talos_ipv6_enabled || !strcontains(ns, ":")
   ]
 
-  talos_resolver_config_patch = {
-    apiVersion = "v1alpha1"
-    kind       = "ResolverConfig"
-    nameservers = [
-      for ns in local.talos_nameservers : {
-        address = ns
-      }
-    ]
-  }
+  talos_resolver_config_patch = merge(
+    {
+      apiVersion = "v1alpha1"
+      kind       = "ResolverConfig"
+      nameservers = [
+        for ns in local.talos_nameservers : {
+          address = ns
+        }
+      ]
+    },
+    # 1.14: .machine.features.hostDNS lives here
+    local.talos_config_documents ? { hostDNS = local.talos_host_dns } : {}
+  )
 
   # Static Hosts (/etc/hosts)
   talos_static_hosts = concat(
@@ -243,71 +247,137 @@ locals {
     for patch in local.talos_user_data_config_patches : yamlencode(patch)
   ]) : null
 
+  # Kubelet settings shared by every node, in either config format
+  talos_kubelet_extra_args = merge(
+    {
+      "cloud-provider"             = "external"
+      "rotate-server-certificates" = true
+    },
+    var.kubernetes_kubelet_extra_args
+  )
+  talos_kubelet_config = {
+    shutdownGracePeriod             = "90s"
+    shutdownGracePeriodCriticalPods = "15s"
+  }
+  talos_kubelet_image_url = var.kubernetes_kubelet_image != null ? "${var.kubernetes_kubelet_image}:${var.kubernetes_version}" : null
+  talos_proxy_image_url   = var.kubernetes_proxy_image != null ? "${var.kubernetes_proxy_image}:${var.kubernetes_version}" : null
+
+  # Settings that stay in v1alpha1 on every Talos version
+  talos_common_machine_config = {
+    certSANs = local.talos_certificate_san
+    kernel = {
+      modules = var.talos_kernel_modules
+    }
+    sysctls = merge(
+      {
+        "net.core.somaxconn"                 = "65535"
+        "net.core.netdev_max_backlog"        = "4096"
+        "net.ipv6.conf.default.disable_ipv6" = "${var.talos_ipv6_enabled ? 0 : 1}"
+        "net.ipv6.conf.all.disable_ipv6"     = "${var.talos_ipv6_enabled ? 0 : 1}"
+      },
+      var.talos_sysctls_extra_args
+    )
+    registries = var.talos_registries
+    logging = {
+      destinations = var.talos_logging_destinations
+    }
+  }
+
+  # Talos < 1.14: everything in the v1alpha1 document
+  talos_common_v1alpha1_config_patches = [{
+    machine = merge(local.talos_common_machine_config, {
+      kubelet = merge(
+        {
+          extraArgs   = local.talos_kubelet_extra_args
+          extraConfig = local.talos_kubelet_config
+          extraMounts = local.talos_kubelet_extra_mounts
+          nodeIP = {
+            validSubnets = [local.network_node_ipv4_cidr]
+          }
+        },
+        local.talos_kubelet_image_url != null ? { image = local.talos_kubelet_image_url } : {}
+      )
+      features = {
+        hostDNS = local.talos_host_dns
+      }
+    })
+    cluster = {
+      network = {
+        dnsDomain      = var.cluster_domain
+        podSubnets     = [local.network_pod_ipv4_cidr]
+        serviceSubnets = [local.network_service_ipv4_cidr]
+        cni            = { name = "none" }
+      }
+      proxy = merge(
+        {
+          disabled = var.cilium_kube_proxy_replacement_enabled
+        },
+        local.talos_proxy_image_url != null ? { image = local.talos_proxy_image_url } : {}
+      )
+      discovery = local.talos_discovery
+    }
+  }]
+
+  # Talos >= 1.14: patch the documents the generator now emits. hostDNS went
+  # to ResolverConfig (talos_resolver_config_patch). There is no document for
+  # kubelet extraMounts or the Kubernetes discovery registry; the
+  # control-plane configuration refuses both up front.
+  talos_common_document_config_patches = concat(
+    [
+      { machine = local.talos_common_machine_config },
+      merge(
+        {
+          apiVersion = "v1alpha1"
+          kind       = "KubeletConfig"
+          extraArgs  = local.talos_kubelet_extra_args
+          config     = local.talos_kubelet_config
+        },
+        local.talos_kubelet_image_url != null ? { image = local.talos_kubelet_image_url } : {}
+      ),
+      {
+        apiVersion = "v1alpha1"
+        kind       = "KubeNodeConfig"
+        nodeIP = {
+          validSubnets = [local.network_node_ipv4_cidr]
+        }
+      },
+      {
+        apiVersion     = "v1alpha1"
+        kind           = "KubeNetworkConfig"
+        dnsDomain      = var.cluster_domain
+        podSubnets     = [local.network_pod_ipv4_cidr]
+        serviceSubnets = [local.network_service_ipv4_cidr]
+      },
+      # Cilium is the CNI — drop the generated Flannel document
+      {
+        apiVersion = "v1alpha1"
+        kind       = "KubeFlannelCNIConfig"
+        "$patch"   = "delete"
+      }
+    ],
+    # Cilium kube-proxy replacement: no kube-proxy at all
+    var.cilium_kube_proxy_replacement_enabled ? [{
+      apiVersion = "v1alpha1"
+      kind       = "KubeProxyConfig"
+      "$patch"   = "delete"
+    }] : [],
+    !var.cilium_kube_proxy_replacement_enabled && local.talos_proxy_image_url != null ? [{
+      apiVersion = "v1alpha1"
+      kind       = "KubeProxyConfig"
+      image      = local.talos_proxy_image_url
+    }] : [],
+    var.talos_discovery_service_enabled ? [] : [{
+      apiVersion = "v1alpha1"
+      kind       = "DiscoveryServiceConfig"
+      name       = "default"
+      "$patch"   = "delete"
+    }]
+  )
+
   # Talos Common Config
   talos_common_config_patches = concat(
-    [{
-      machine = {
-        certSANs = local.talos_certificate_san
-        kubelet = merge(
-          {
-            extraArgs = merge(
-              {
-                "cloud-provider"             = "external"
-                "rotate-server-certificates" = true
-              },
-              var.kubernetes_kubelet_extra_args
-            )
-            extraConfig = {
-              shutdownGracePeriod             = "90s"
-              shutdownGracePeriodCriticalPods = "15s"
-            }
-            extraMounts = local.talos_kubelet_extra_mounts
-            nodeIP = {
-              validSubnets = [local.network_node_ipv4_cidr]
-            }
-          },
-          var.kubernetes_kubelet_image != null ? {
-            image = "${var.kubernetes_kubelet_image}:${var.kubernetes_version}"
-          } : {}
-        )
-        kernel = {
-          modules = var.talos_kernel_modules
-        }
-        sysctls = merge(
-          {
-            "net.core.somaxconn"                 = "65535"
-            "net.core.netdev_max_backlog"        = "4096"
-            "net.ipv6.conf.default.disable_ipv6" = "${var.talos_ipv6_enabled ? 0 : 1}"
-            "net.ipv6.conf.all.disable_ipv6"     = "${var.talos_ipv6_enabled ? 0 : 1}"
-          },
-          var.talos_sysctls_extra_args
-        )
-        registries = var.talos_registries
-        features = {
-          hostDNS = local.talos_host_dns
-        }
-        logging = {
-          destinations = var.talos_logging_destinations
-        }
-      }
-      cluster = {
-        network = {
-          dnsDomain      = var.cluster_domain
-          podSubnets     = [local.network_pod_ipv4_cidr]
-          serviceSubnets = [local.network_service_ipv4_cidr]
-          cni            = { name = "none" }
-        }
-        proxy = merge(
-          {
-            disabled = var.cilium_kube_proxy_replacement_enabled
-          },
-          var.kubernetes_proxy_image != null ? {
-            image = "${var.kubernetes_proxy_image}:${var.kubernetes_version}"
-          } : {}
-        )
-        discovery = local.talos_discovery
-      }
-    }],
+    [for p in local.talos_common_document_config_patches : p if local.talos_config_documents],
+    [for p in local.talos_common_v1alpha1_config_patches : p if !local.talos_config_documents],
     local.talos_system_volume_config_patches,
     [local.talos_resolver_config_patch],
     [local.talos_time_sync_config_patch],
@@ -318,16 +388,30 @@ locals {
 
   talos_cloud_config_patches = concat(
     local.talos_common_config_patches,
-    [
-      {
-        machine = {
-          install = {
-            image           = local.talos_cloud_installer_image_url
-            extraKernelArgs = var.talos_extra_kernel_args
-          }
+    # 1.14 drops install.extraKernelArgs; the args already ride in the
+    # image factory schematic behind the installer URL (image.tf). Patching
+    # this document drops the generated disk selector, so it is set again:
+    # /dev/sda, the disk the v1alpha1 install defaulted to on Hetzner Cloud.
+    [for p in [{
+      apiVersion = "v1alpha1"
+      kind       = "UnattendedInstallConfig"
+      installer = {
+        image = local.talos_cloud_installer_image_url
+      }
+      provisioning = {
+        diskSelector = {
+          match = "disk.dev_path == \"/dev/sda\""
         }
       }
-    ],
+    }] : p if local.talos_config_documents],
+    [for p in [{
+      machine = {
+        install = {
+          image           = local.talos_cloud_installer_image_url
+          extraKernelArgs = var.talos_extra_kernel_args
+        }
+      }
+    }] : p if !local.talos_config_documents],
     local.talos_cloud_public_link_config_patches,
     local.talos_cloud_public_dhcp_config_patches,
     local.talos_cloud_private_link_config_patches,

@@ -1,32 +1,51 @@
 locals {
   # Autoscaler Config
-  autoscaler_nodepool_talos_config_patch = {
-    for nodepool in local.cluster_autoscaler_nodepools : nodepool.name => [
+  autoscaler_nodepool_kubelet_config = {
+    for nodepool in local.cluster_autoscaler_nodepools : nodepool.name => merge(
       {
+        registerWithTaints = nodepool.taints
+        systemReserved = {
+          cpu               = "100m"
+          memory            = "300Mi"
+          ephemeral-storage = "1Gi"
+        }
+        kubeReserved = {
+          cpu               = "100m"
+          memory            = "350Mi"
+          ephemeral-storage = "1Gi"
+        }
+      },
+      var.kubernetes_kubelet_extra_config
+    )
+  }
+
+  autoscaler_nodepool_talos_config_patch = {
+    for nodepool in local.cluster_autoscaler_nodepools : nodepool.name => concat(
+      # Talos >= 1.14
+      [for p in [
+        {
+          apiVersion  = "v1alpha1"
+          kind        = "KubeNodeConfig"
+          labels      = nodepool.labels
+          annotations = nodepool.annotations
+        },
+        {
+          apiVersion = "v1alpha1"
+          kind       = "KubeletConfig"
+          config     = local.autoscaler_nodepool_kubelet_config[nodepool.name]
+        }
+      ] : p if local.talos_config_documents],
+      # Talos < 1.14
+      [for p in [{
         machine = {
           nodeLabels      = nodepool.labels
           nodeAnnotations = nodepool.annotations
           kubelet = {
-            extraConfig = merge(
-              {
-                registerWithTaints = nodepool.taints
-                systemReserved = {
-                  cpu               = "100m"
-                  memory            = "300Mi"
-                  ephemeral-storage = "1Gi"
-                }
-                kubeReserved = {
-                  cpu               = "100m"
-                  memory            = "350Mi"
-                  ephemeral-storage = "1Gi"
-                }
-              },
-              var.kubernetes_kubelet_extra_config
-            )
+            extraConfig = local.autoscaler_nodepool_kubelet_config[nodepool.name]
           }
         }
-      }
-    ]
+      }] : p if !local.talos_config_documents]
+    )
   }
 }
 

@@ -1,41 +1,63 @@
 locals {
   # Worker Config
-  worker_talos_config_patches = {
-    for name, node in hcloud_server.worker : name => [
+  worker_node_labels = {
+    for name, node in hcloud_server.worker : name => merge(
+      local.worker_nodepools_map[node.labels.nodepool].labels,
+      { "nodeid" = tostring(node.id) }
+    )
+  }
+  worker_kubelet_config = {
+    for name, node in hcloud_server.worker : name => merge(
       {
-        machine = {
-          nodeLabels = merge(
-            local.worker_nodepools_map[node.labels.nodepool].labels,
-            { "nodeid" = tostring(node.id) }
-          )
-          nodeAnnotations = local.worker_nodepools_map[node.labels.nodepool].annotations
-          kubelet = {
-            extraConfig = merge(
-              {
-                registerWithTaints = local.worker_nodepools_map[node.labels.nodepool].taints
-                systemReserved = {
-                  cpu               = "100m"
-                  memory            = "300Mi"
-                  ephemeral-storage = "1Gi"
-                }
-                kubeReserved = {
-                  cpu               = "100m"
-                  memory            = "350Mi"
-                  ephemeral-storage = "1Gi"
-                }
-              },
-              var.kubernetes_kubelet_extra_config
-            )
-          }
+        registerWithTaints = local.worker_nodepools_map[node.labels.nodepool].taints
+        systemReserved = {
+          cpu               = "100m"
+          memory            = "300Mi"
+          ephemeral-storage = "1Gi"
+        }
+        kubeReserved = {
+          cpu               = "100m"
+          memory            = "350Mi"
+          ephemeral-storage = "1Gi"
         }
       },
-      {
+      var.kubernetes_kubelet_extra_config
+    )
+  }
+
+  worker_talos_config_patches = {
+    for name, node in hcloud_server.worker : name => concat(
+      # Talos >= 1.14
+      [for p in [
+        {
+          apiVersion  = "v1alpha1"
+          kind        = "KubeNodeConfig"
+          labels      = local.worker_node_labels[name]
+          annotations = local.worker_nodepools_map[node.labels.nodepool].annotations
+        },
+        {
+          apiVersion = "v1alpha1"
+          kind       = "KubeletConfig"
+          config     = local.worker_kubelet_config[name]
+        }
+      ] : p if local.talos_config_documents],
+      # Talos < 1.14
+      [for p in [{
+        machine = {
+          nodeLabels      = local.worker_node_labels[name]
+          nodeAnnotations = local.worker_nodepools_map[node.labels.nodepool].annotations
+          kubelet = {
+            extraConfig = local.worker_kubelet_config[name]
+          }
+        }
+      }] : p if !local.talos_config_documents],
+      [{
         apiVersion = "v1alpha1"
         kind       = "HostnameConfig"
         hostname   = name
         auto       = "off"
-      }
-    ]
+      }]
+    )
   }
 }
 

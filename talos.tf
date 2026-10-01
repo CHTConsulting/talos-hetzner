@@ -5,6 +5,13 @@ locals {
   talos_version_minor = local.talos_version_parts.minor
   talos_version_patch = local.talos_version_parts.patch
 
+  # Talos 1.14 moved the Kubernetes settings out of the v1alpha1 document into
+  # dedicated documents (KubeletConfig, KubeNodeConfig, KubeNetworkConfig, ...),
+  # emits those documents itself under a 1.14 contract, and rejects a config
+  # that sets a field in both places. From 1.14 on the module therefore patches
+  # the documents; older versions keep the v1alpha1 patches unchanged.
+  talos_config_documents = tonumber(local.talos_version_major) > 1 || tonumber(local.talos_version_minor) >= 14
+
   # Talos Nodes
   talos_primary_node_name         = sort(keys(hcloud_server.control_plane))[0]
   talos_primary_node_private_ipv4 = tolist(hcloud_server.control_plane[local.talos_primary_node_name].network)[0].ip
