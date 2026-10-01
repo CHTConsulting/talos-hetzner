@@ -36,7 +36,7 @@ Added or changed relative to upstream:
   `KubeNodeConfig`, `KubeNetworkConfig`, `KubeAPIServerConfig`,
   `UnattendedInstallConfig`, ...) instead of the deprecated `v1alpha1` fields;
   1.13 keeps the `v1alpha1` patches unchanged.
-- Defaults: Talos v1.13.10 (talos provider 0.12.0), Kubernetes v1.36.3 with a
+- Defaults: Talos v1.14.1 (talos provider 0.12.0), Kubernetes v1.36.3 with a
   matching Cluster Autoscaler, Cilium Gateway API enabled.
 
 The upstream README (`README.md`) documents the module's full surface; the
