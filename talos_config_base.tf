@@ -355,17 +355,6 @@ locals {
         "$patch"   = "delete"
       }
     ],
-    # Cilium kube-proxy replacement: no kube-proxy at all
-    var.cilium_kube_proxy_replacement_enabled ? [{
-      apiVersion = "v1alpha1"
-      kind       = "KubeProxyConfig"
-      "$patch"   = "delete"
-    }] : [],
-    !var.cilium_kube_proxy_replacement_enabled && local.talos_proxy_image_url != null ? [{
-      apiVersion = "v1alpha1"
-      kind       = "KubeProxyConfig"
-      image      = local.talos_proxy_image_url
-    }] : [],
     var.talos_discovery_service_enabled ? [] : [{
       apiVersion = "v1alpha1"
       kind       = "DiscoveryServiceConfig"

@@ -186,6 +186,17 @@ locals {
           kind       = "KubeCoreDNSConfig"
           enabled    = var.talos_coredns_enabled
         },
+        # Cilium kube-proxy replacement: no kube-proxy. Deleting the document
+        # is not enough — Talos then falls back to its default and deploys
+        # kube-proxy anyway; `enabled: false` is the switch. Control plane only.
+        merge(
+          {
+            apiVersion = "v1alpha1"
+            kind       = "KubeProxyConfig"
+            enabled    = !var.cilium_kube_proxy_replacement_enabled
+          },
+          local.talos_proxy_image_url != null ? { image = local.talos_proxy_image_url } : {}
+        ),
         merge(
           {
             apiVersion    = "v1alpha1"
