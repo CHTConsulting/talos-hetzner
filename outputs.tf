@@ -129,6 +129,15 @@ output "subnet_router" {
   } : null
 }
 
+output "subnet_routers" {
+  description = "All subnet router VMs: one, or two with subnet_router_ha_enabled. The egress route may point at either after a failover."
+  value = [for i, s in hcloud_server.subnet_router : {
+    name         = s.name
+    public_ipv4  = s.ipv4_address
+    private_ipv4 = local.subnet_router_ipv4s[i]
+  }]
+}
+
 output "kube_api_host" {
   description = "Kubernetes API host (IP or hostname) the module exposes for client config. Resolves to a private IP when cluster_access = \"private\". Use this in your kubernetes/flux provider config so the host stays in sync with the module."
   value       = local.kube_api_host

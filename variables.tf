@@ -756,6 +756,24 @@ variable "subnet_router_node_exporter_enabled" {
   description = "If true, cloud-init installs prometheus-node-exporter on the subnet router VM, bound to its private IPv4 only (port 9100). Scrape it from inside the cluster network; the cluster firewall never opens 9100 publicly."
 }
 
+variable "subnet_router_ha_enabled" {
+  type        = bool
+  default     = false
+  description = "If true, run a second subnet router (ts-router-<cluster>-b, .11). Both advertise the cluster CIDR (Tailscale fails over on its own), and each watches the other: when the router the 0.0.0.0/0 route points at stops answering pings for ~15 s, the survivor moves the route to itself through the Hetzner API. Needs a reusable Tailscale auth key and puts an hcloud token on both router VMs (see subnet_router_ha_hcloud_token)."
+
+  validation {
+    condition     = var.subnet_router_ha_enabled == false || var.subnet_router_enabled
+    error_message = "subnet_router_ha_enabled needs subnet_router_enabled = true."
+  }
+}
+
+variable "subnet_router_ha_hcloud_token" {
+  type        = string
+  default     = null
+  sensitive   = true
+  description = "Hetzner Cloud token the HA routers use to move the egress route. Defaults to hcloud_token. Hetzner tokens are project-wide, so whoever gets root on a router gets the project: put the cluster in its own Hetzner project."
+}
+
 variable "subnet_router_ssh_enabled" {
   type        = bool
   default     = false
