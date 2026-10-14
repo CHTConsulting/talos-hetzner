@@ -156,11 +156,11 @@ Talos Linux is a secure, minimal, and immutable OS for Kubernetes, removing SSH 
 <!-- Installation -->
 ### 🎯 Installation
 
-Create `kubernetes.tf` file with the module configuration:
+Create `kubernetes.tf` file with the module configuration. This fork is not
+on the Terraform Registry — reference it from GitHub, pinned to a release tag:
 ```hcl
 module "kubernetes" {
-  source  = "hcloud-k8s/kubernetes/hcloud"
-  version = "<version>"
+  source = "git::https://github.com/CHTConsulting/talos-hetzner.git?ref=v1.0.0"
 
   cluster_name = "k8s"
   hcloud_token = "<hcloud-token>"
@@ -183,6 +183,16 @@ module "kubernetes" {
 ```
 > [!NOTE]
 > Each Control Plane node requires at least 4GB of memory and each Worker node at least 2GB. For High-Availability (HA), at least 3 Control Plane nodes and 3 Worker nodes are required.
+
+The fork's additions are opt-in. A fully private cluster — no public node IPs,
+Kube and Talos APIs reachable only over your tailnet, egress through the subnet
+router — adds:
+```hcl
+  cluster_access                   = "private"
+  subnet_router_enabled            = true
+  cluster_egress_via_subnet_router = true
+  subnet_router_tailscale_authkey  = "<tailscale-auth-key>"
+```
 
 Initialize and deploy the cluster:
 
@@ -1353,6 +1363,12 @@ talos_certificates = {
 This module manages the versions of Talos, Kubernetes, and all bundled [components](#-components) together. Each Hcloud K8s major version targets a defined Talos and Kubernetes minor version, while component versions are selected for compatibility with that Kubernetes release.
 
 ### 📌 Hcloud Kubernetes Versions
+> [!NOTE]
+> **This fork has its own version line.** `v1.x` is based on upstream
+> **5.10.0** and defaults to Talos **v1.14.1**, with Talos 1.13 still
+> supported (see the fork notes at the top). The table below is upstream's
+> and describes upstream releases.
+
 The table below lists the Talos and Kubernetes versions used by each Hcloud K8s version.
 
 | Hcloud K8s | Talos Linux | Kubernetes |
@@ -1453,7 +1469,12 @@ Your sponsorship supports the ongoing development, improvement, and maintenance 
 
 <!-- Community -->
 ## 👋 Community
-We welcome everyone to join the [Discussions](https://github.com/hcloud-k8s/terraform-hcloud-kubernetes/discussions), report [Issues](https://github.com/hcloud-k8s/terraform-hcloud-kubernetes/issues/new/choose), and help improve this project.
+Issues specific to this fork — the subnet router, `cluster_access = "private"`,
+the Talos 1.14 config documents — belong in
+[this repository's issues](https://github.com/CHTConsulting/talos-hetzner/issues).
+For everything the fork inherits unchanged, the upstream project is the place:
+join its [Discussions](https://github.com/hcloud-k8s/terraform-hcloud-kubernetes/discussions)
+or report [Issues](https://github.com/hcloud-k8s/terraform-hcloud-kubernetes/issues/new/choose) there.
 
 <!-- Contributing -->
 ### 🤝 Contributing
@@ -1479,7 +1500,7 @@ Hcloud Kubernetes is an independent, [open source](https://opensource.org/osd) p
 <!-- License -->
 ### ⚖️ License
 
-Distributed under the MIT License. See [LICENSE](https://github.com/hcloud-k8s/terraform-hcloud-kubernetes/blob/main/LICENSE) for more information.
+Distributed under the MIT License. See [LICENSE](LICENSE) and [NOTICE.md](NOTICE.md) for the upstream copyright and what this fork changed.
 
 <!-- Acknowledgments -->
 ### 💎 Acknowledgements
