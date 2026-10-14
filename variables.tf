@@ -750,6 +750,12 @@ variable "subnet_router_image" {
   description = "OS image for the subnet router VM. Defaults to Ubuntu 24.04 LTS — broadly tested, ships apt + systemd that the default cloud-init script targets. If you override with a non-Debian/Ubuntu image you'll need to adjust the bootstrap commands."
 }
 
+variable "subnet_router_node_exporter_enabled" {
+  type        = bool
+  default     = true
+  description = "If true, cloud-init installs prometheus-node-exporter on the subnet router VM, bound to its private IPv4 only (port 9100). Scrape it from inside the cluster network; the cluster firewall never opens 9100 publicly."
+}
+
 variable "subnet_router_ssh_enabled" {
   type        = bool
   default     = false

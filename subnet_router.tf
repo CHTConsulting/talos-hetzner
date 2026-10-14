@@ -93,6 +93,23 @@ locals {
             --ssh
 
           tailscale status
+
+          # node_exporter on the private IP only — the cluster scrapes it over
+          # the Hetzner network. Best effort: a failed install must not take
+          # down routing, which is already up at this point.
+          if [ "${var.subnet_router_node_exporter_enabled}" != "true" ]; then
+            echo "node_exporter disabled (subnet_router_node_exporter_enabled = false)"
+          elif DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 update &&
+             DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 install -y prometheus-node-exporter; then
+            echo 'ARGS="--web.listen-address=${local.subnet_router_ipv4}:9100"' > /etc/default/prometheus-node-exporter
+            mkdir -p /etc/systemd/system/prometheus-node-exporter.service.d
+            printf '[Unit]\nAfter=network-online.target\nWants=network-online.target\n[Service]\nRestart=always\nRestartSec=5\n' \
+              > /etc/systemd/system/prometheus-node-exporter.service.d/override.conf
+            systemctl daemon-reload
+            systemctl restart prometheus-node-exporter
+          else
+            echo "WARN: prometheus-node-exporter install failed; routing is unaffected"
+          fi
           echo "=== $(date -u +%FT%TZ) bootstrap complete ==="
           touch /var/log/setup-tailscale.done
     runcmd:

@@ -11,7 +11,14 @@ Terraform module that deploys a Talos Linux Kubernetes cluster on Hetzner Cloud.
 > - **Tailscale subnet router** (`subnet_router.tf`) — an optional Hetzner VM
 >   that joins your tailnet, advertises the cluster's private CIDR, and
 >   provides outbound NAT for fully-private clusters
->   (`subnet_router_enabled`, `cluster_egress_via_subnet_router`).
+>   (`subnet_router_enabled`, `cluster_egress_via_subnet_router`). Ubuntu
+>   24.04, configured once by cloud-init; reach it with Tailscale SSH
+>   (`ssh root@ts-router-<cluster_name>`, needs an `ssh` rule for its tag in
+>   your tailnet policy). It runs `prometheus-node-exporter` on its private
+>   IP, port 9100 (`subnet_router_node_exporter_enabled`, on by default), so
+>   the cluster can scrape the one box that isn't Talos. One router per
+>   cluster, no failover: it is a single point of failure for egress and
+>   tailnet access.
 > - **`cluster_access = "private"`** with no public node IPs and no inbound
 >   firewall rules — the Kube and Talos APIs are reachable only over the
 >   tailnet.
