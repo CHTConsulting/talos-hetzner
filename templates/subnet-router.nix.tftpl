@@ -52,7 +52,12 @@
     listenAddress = "${self_ip}";
     port = 9100;
     openFirewall = true;
+    # router-failover writes the egress state here (router_egress_active and
+    # friends), so the dashboard shows which router carries the traffic.
+    enabledCollectors = lib.optionals ${ha} [ "textfile" ];
+    extraFlags = lib.optionals ${ha} [ "--collector.textfile.directory=/var/lib/router-metrics" ];
   };
+  systemd.tmpfiles.rules = lib.optionals ${ha} [ "d /var/lib/router-metrics 0755 root root -" ];
   systemd.services.prometheus-node-exporter = lib.mkIf ${node_exporter} {
     after = [ "network-online.target" ];
     wants = [ "network-online.target" ];
@@ -62,7 +67,8 @@
 
   # HA pair: each router pings the other. When the router the 0.0.0.0/0 route
   # points at misses three pings, the survivor moves the route to itself
-  # through the Hetzner API. No automatic fail-back.
+  # through the Hetzner API. No automatic fail-back. Once a minute it also
+  # reads the route back and publishes the state for node_exporter.
   systemd.services.router-failover = lib.mkIf ${ha} {
     description = "Move the cluster egress route to this router when its peer dies";
     after = [ "network-online.target" ];
@@ -76,7 +82,8 @@
       PEER='${peer_ip}'
       API='https://api.hetzner.cloud/v1/networks/${network_id}'
       TOKEN="$(cat /etc/nixos/secrets/hcloud-token)"
-      FAILS=0
+      PROM=/var/lib/router-metrics/failover.prom
+      FAILS=0 TICK=0 TAKEOVERS=0 PEER_UP=1 GW=-
       log() { echo "$(date -u +%FT%TZ) $*"; }
       gateway() {
         curl -fsS --max-time 10 -H "Authorization: Bearer $TOKEN" "$API" |
@@ -90,18 +97,53 @@
         done
         return 1
       }
+      publish() { # written atomically: node_exporter must never read half a file
+        {
+          echo '# HELP router_egress_active 1 if the network egress route points at this router.'
+          echo '# TYPE router_egress_active gauge'
+          echo "router_egress_active $([ "$GW" = "$SELF" ] && echo 1 || echo 0)"
+          echo '# HELP router_peer_up 1 if the peer router answers pings.'
+          echo '# TYPE router_peer_up gauge'
+          echo "router_peer_up $PEER_UP"
+          echo '# HELP router_failover_takeovers_total Times this router moved the egress route to itself.'
+          echo '# TYPE router_failover_takeovers_total counter'
+          echo "router_failover_takeovers_total $TAKEOVERS"
+          echo '# HELP router_failover_last_check_timestamp_seconds Last successful read of the route from the API.'
+          echo '# TYPE router_failover_last_check_timestamp_seconds gauge'
+          echo "router_failover_last_check_timestamp_seconds $CHECKED"
+        } > "$PROM.tmp" && mv "$PROM.tmp" "$PROM"
+      }
+      refresh() { # reads the route; keeps the last known value when the API is down
+        local g
+        if g="$(gateway)"; then GW="$g"; CHECKED="$(date +%s)"; return 0; fi
+        log "cannot read the network from the API"; return 1
+      }
+      CHECKED=0
       log "watching $PEER from $SELF"
+      refresh; publish
       while true; do
-        if ping -c1 -W2 "$PEER" >/dev/null 2>&1; then FAILS=0; sleep 5; continue; fi
+        TICK=$((TICK + 1))
+        if ping -c1 -W2 "$PEER" >/dev/null 2>&1; then
+          FAILS=0 PEER_UP=1
+          # Every ~minute: read the route back for the metrics.
+          if [ $((TICK % 12)) -eq 0 ]; then refresh; publish; fi
+          sleep 5; continue
+        fi
         FAILS=$((FAILS + 1))
         log "peer $PEER missed a ping ($FAILS/3)"
         if [ "$FAILS" -lt 3 ]; then sleep 5; continue; fi
-        if ! GW="$(gateway)"; then log "cannot read the network from the API"; sleep 10; continue; fi
+        PEER_UP=0
+        if ! refresh; then publish; sleep 10; continue; fi
         if [ "$GW" = "$PEER" ] || [ "$GW" = "-" ]; then
           log "taking over 0.0.0.0/0 (was: $GW)"
-          { [ "$GW" = "-" ] || route delete_route "$PEER"; } && route add_route "$SELF" &&
-            log "egress route now points at $SELF" || log "takeover failed, will retry"
+          if { [ "$GW" = "-" ] || route delete_route "$PEER"; } && route add_route "$SELF"; then
+            GW="$SELF" TAKEOVERS=$((TAKEOVERS + 1))
+            log "egress route now points at $SELF"
+          else
+            log "takeover failed, will retry"
+          fi
         fi
+        publish
         # Already ours: the peer is dead but there is nothing to do — ask the API less often.
         if [ "$GW" = "$SELF" ]; then sleep 30; else sleep 10; fi
       done

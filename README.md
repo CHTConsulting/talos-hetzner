@@ -25,8 +25,12 @@ Terraform module that deploys a Talos Linux Kubernetes cluster on Hetzner Cloud.
 >   both advertise the CIDR, so Tailscale fails over on its own, and each
 >   pings the other — when the router the `0.0.0.0/0` route points at stops
 >   answering for ~15 s, the survivor moves the route to itself through the
->   Hetzner API. That puts an hcloud token on both VMs, and Hetzner tokens are
->   project-wide: give the cluster its own project.
+>   Hetzner API. Each router publishes the state through node_exporter's
+>   textfile collector: `router_egress_active` (1 on the router that carries
+>   egress), `router_peer_up`, `router_failover_takeovers_total` and
+>   `router_failover_last_check_timestamp_seconds` (the route is read back
+>   from the API once a minute). That puts an hcloud token on both VMs, and
+>   Hetzner tokens are project-wide: give the cluster its own project.
 > - **`cluster_access = "private"`** with no public node IPs and no inbound
 >   firewall rules — the Kube and Talos APIs are reachable only over the
 >   tailnet.
