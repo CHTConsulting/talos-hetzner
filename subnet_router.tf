@@ -22,168 +22,42 @@ locals {
   subnet_router_names    = ["ts-router-${var.cluster_name}", "ts-router-${var.cluster_name}-b"]
   subnet_router_ha_token = var.subnet_router_ha_enabled ? coalesce(var.subnet_router_ha_hcloud_token, var.hcloud_token) : ""
 
-  # Minimal cloud-init: single shell script with logging so we can debug.
-  # No `package_update`, no `iptables-persistent` (debconf hang risk).
-  # NAT rule is re-applied on every boot by a systemd oneshot.
-  subnet_router_user_data = [for i in range(local.subnet_router_count) : <<-EOT
-    #cloud-config
-    write_files:
-      # Ubuntu images do not bring up the private-network NIC on their own;
-      # without it the router advertises a network it cannot reach.
-      - path: /etc/netplan/60-hcloud-private.yaml
-        permissions: '0600'
-        content: |
-          network:
-            version: 2
-            ethernets:
-              hcloud-private:
-                match:
-                  name: "en*"
-                dhcp4: true
-      - path: /etc/systemd/system/subnet-router-nat.service
-        content: |
-          [Unit]
-          Description=Configure NAT MASQUERADE for cluster egress
-          After=network-online.target
-          Wants=network-online.target
-          [Service]
-          Type=oneshot
-          RemainAfterExit=yes
-          ExecStart=/sbin/iptables -t nat -A POSTROUTING -s ${var.network_ipv4_cidr} ! -d ${var.network_ipv4_cidr} -j MASQUERADE
-          ExecStop=/sbin/iptables -t nat -D POSTROUTING -s ${var.network_ipv4_cidr} ! -d ${var.network_ipv4_cidr} -j MASQUERADE
-          [Install]
-          WantedBy=multi-user.target
-      # HA pair only: the token lets the survivor move the egress route.
-      - path: /etc/router-failover/token
-        permissions: '0600'
-        content: "${local.subnet_router_ha_token}"
-      - path: /usr/local/bin/router-failover.sh
-        permissions: '0755'
-        content: |
-          #!/bin/bash
-          # Keeps the cluster's 0.0.0.0/0 route on a live router. Each router of
-          # the HA pair pings the other; when the one the route points at stops
-          # answering, the survivor moves the route to itself through the
-          # Hetzner API. No automatic fail-back: the route stays where it works.
-          set -u
-          SELF='${local.subnet_router_ipv4s[i]}'
-          PEER='${local.subnet_router_ipv4s[1 - i]}'
-          API='https://api.hetzner.cloud/v1/networks/${local.hcloud_network_id}'
-          TOKEN="$(cat /etc/router-failover/token)"
-          FAILS=0
-          log() { echo "$(date -u +%FT%TZ) $*"; }
-          gateway() {
-            curl -fsS --max-time 10 -H "Authorization: Bearer $TOKEN" "$API" |
-              python3 -c 'import json,sys; r=[x["gateway"] for x in json.load(sys.stdin)["network"]["routes"] if x["destination"]=="0.0.0.0/0"]; print(r[0] if r else "-")'
-          }
-          route() { # route <add_route|delete_route> <gateway>, retried while the network is locked
-            for _ in 1 2 3 4 5 6 7 8 9 10; do
-              curl -fsS --max-time 10 -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-                -d "{\"destination\":\"0.0.0.0/0\",\"gateway\":\"$2\"}" "$API/actions/$1" >/dev/null && return 0
-              sleep 3
-            done
-            return 1
-          }
-          log "watching $PEER from $SELF"
-          while true; do
-            if ping -c1 -W2 "$PEER" >/dev/null 2>&1; then FAILS=0; sleep 5; continue; fi
-            FAILS=$((FAILS + 1))
-            log "peer $PEER missed a ping ($FAILS/3)"
-            if [ "$FAILS" -lt 3 ]; then sleep 5; continue; fi
-            if ! GW="$(gateway)"; then log "cannot read the network from the API"; sleep 10; continue; fi
-            if [ "$GW" = "$PEER" ] || [ "$GW" = "-" ]; then
-              log "taking over 0.0.0.0/0 (was: $GW)"
-              { [ "$GW" = "-" ] || route delete_route "$PEER"; } && route add_route "$SELF" &&
-                log "egress route now points at $SELF" || log "takeover failed, will retry"
-            fi
-            # Already ours: the peer is dead but nothing to do — ask the API less often.
-            if [ "$GW" = "$SELF" ]; then sleep 30; else sleep 10; fi
-          done
-      - path: /etc/systemd/system/router-failover.service
-        content: |
-          [Unit]
-          Description=Move the cluster egress route to this router when its peer dies
-          After=network-online.target
-          Wants=network-online.target
-          [Service]
-          ExecStart=/usr/local/bin/router-failover.sh
-          Restart=always
-          RestartSec=10
-          [Install]
-          WantedBy=multi-user.target
-      - path: /usr/local/bin/setup-tailscale.sh
-        permissions: '0755'
-        content: |
-          #!/bin/bash
-          # Logs to /var/log/setup-tailscale.log — `tail -f` to debug.
-          exec > >(tee -a /var/log/setup-tailscale.log) 2>&1
-          set -euxo pipefail
+  # The router runs NixOS, declared in templates/subnet-router.nix.tftpl. Hetzner
+  # has no NixOS image, so the VM boots the Ubuntu base image once and
+  # nixos-infect (pinned by commit and hash) converts it in place, then
+  # reboots into NixOS. cloud-init only drops files and starts the conversion;
+  # everything the router does lives in the Nix file.
+  subnet_router_nixos_infect_url    = "https://raw.githubusercontent.com/elitak/nixos-infect/40f62a680bb0e8f2f607d79abfaaecd99d59401c/nixos-infect"
+  subnet_router_nixos_infect_sha256 = "4354bd68773b41da65c0e815202c43c8549713b3ed3ff6381c71fbc0b0a840ab"
 
-          echo "=== $(date -u +%FT%TZ) starting subnet-router bootstrap ==="
+  subnet_router_nix = [for i in range(local.subnet_router_count) : templatefile("${path.module}/templates/subnet-router.nix.tftpl", {
+    cidr          = var.network_ipv4_cidr
+    hostname      = local.subnet_router_names[i]
+    self_ip       = local.subnet_router_ipv4s[i]
+    peer_ip       = local.subnet_router_ipv4s[1 - i]
+    network_id    = local.hcloud_network_id
+    ha            = var.subnet_router_ha_enabled ? "true" : "false"
+    node_exporter = var.subnet_router_node_exporter_enabled ? "true" : "false"
+  })]
 
-          # Private network NIC (netplan file above), then wait for its lease
-          netplan apply
-          for i in $(seq 1 30); do
-            ip -4 addr show | grep -q 'inet ${local.subnet_router_ipv4s[i]}/' && break || sleep 1
-          done
-
-          # IP forwarding
-          cat > /etc/sysctl.d/99-tailscale.conf <<'SYSCTL'
-          net.ipv4.ip_forward = 1
-          net.ipv6.conf.all.forwarding = 1
-          SYSCTL
-          sysctl -p /etc/sysctl.d/99-tailscale.conf
-
-          # NAT oneshot
-          systemctl daemon-reload
-          systemctl enable --now subnet-router-nat.service
-
-          # Install tailscale (idempotent)
-          if ! command -v tailscale >/dev/null 2>&1; then
-            curl -fsSL https://tailscale.com/install.sh | sh
-          fi
-          systemctl enable --now tailscaled
-
-          # Wait briefly for the local socket
-          for i in $(seq 1 30); do
-            tailscale status >/dev/null 2>&1 && break || sleep 1
-          done
-
-          tailscale up \
-            --auth-key='${coalesce(var.subnet_router_tailscale_authkey, "MISSING")}' \
-            --advertise-routes='${var.network_ipv4_cidr}' \
-            --hostname='${local.subnet_router_names[i]}' \
-            --accept-dns=false \
-            --ssh
-
-          tailscale status
-
-          # node_exporter on the private IP only — the cluster scrapes it over
-          # the Hetzner network. Best effort: a failed install must not take
-          # down routing, which is already up at this point.
-          if [ "${var.subnet_router_node_exporter_enabled}" != "true" ]; then
-            echo "node_exporter disabled (subnet_router_node_exporter_enabled = false)"
-          elif DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 update &&
-             DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 install -y prometheus-node-exporter; then
-            echo 'ARGS="--web.listen-address=${local.subnet_router_ipv4s[i]}:9100"' > /etc/default/prometheus-node-exporter
-            mkdir -p /etc/systemd/system/prometheus-node-exporter.service.d
-            printf '[Unit]\nAfter=network-online.target\nWants=network-online.target\n[Service]\nRestart=always\nRestartSec=5\n' \
-              > /etc/systemd/system/prometheus-node-exporter.service.d/override.conf
-            systemctl daemon-reload
-            systemctl restart prometheus-node-exporter
-          else
-            echo "WARN: prometheus-node-exporter install failed; routing is unaffected"
-          fi
-          if [ "${var.subnet_router_ha_enabled}" = "true" ]; then
-            systemctl daemon-reload
-            systemctl enable --now router-failover.service
-          fi
-          echo "=== $(date -u +%FT%TZ) bootstrap complete ==="
-          touch /var/log/setup-tailscale.done
-    runcmd:
-      - /usr/local/bin/setup-tailscale.sh
-  EOT
-  ]
+  subnet_router_user_data = [for i in range(local.subnet_router_count) : join("\n", [
+    "#cloud-config",
+    yamlencode({
+      write_files = [
+        { path = "/etc/nixos/router.nix", permissions = "0644", content = local.subnet_router_nix[i] },
+        { path = "/etc/nixos/secrets/ts-authkey", permissions = "0600", content = coalesce(var.subnet_router_tailscale_authkey, "MISSING") },
+        { path = "/etc/nixos/secrets/hcloud-token", permissions = "0600", content = local.subnet_router_ha_token },
+      ]
+      runcmd = [
+        # Our network config is plain DHCP (router.nix); without this file
+        # nixos-infect would write a static one that lacks the private route.
+        "rm -f /etc/hetzner-build",
+        "curl -fsSL -o /root/nixos-infect ${local.subnet_router_nixos_infect_url}",
+        # Runs only if the script is exactly the pinned one; reboots into NixOS.
+        "echo '${local.subnet_router_nixos_infect_sha256}  /root/nixos-infect' | sha256sum -c - && PROVIDER=hetznercloud-dhcp NIX_CHANNEL=nixos-25.11 NIXOS_IMPORT=./router.nix bash /root/nixos-infect > /var/log/nixos-infect.log 2>&1",
+      ]
+    })
+  ])]
 }
 
 resource "hcloud_network_subnet" "subnet_router" {

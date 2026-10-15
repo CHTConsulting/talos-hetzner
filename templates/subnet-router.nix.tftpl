@@ -1,0 +1,110 @@
+# The subnet router, declared. Rendered by subnet_router.tf, dropped into
+# /etc/nixos by cloud-init and imported by the configuration nixos-infect
+# writes when it turns the Ubuntu base image into NixOS. To change a running
+# router: edit /etc/nixos/router.nix and `nixos-rebuild switch` (rollback:
+# `nixos-rebuild switch --rollback`), or let Terraform replace the VM.
+#
+# Secrets never enter this file: they sit in /etc/nixos/secrets (0600),
+# written by cloud-init next to it.
+{ lib, pkgs, ... }:
+{
+  # Hetzner hands out both the public and the private address over DHCP,
+  # including the classless route to the private network.
+  networking.useNetworkd = true;
+  networking.useDHCP = true;
+
+  boot.kernel.sysctl = {
+    "net.ipv4.ip_forward" = 1;
+    "net.ipv6.conf.all.forwarding" = 1;
+  };
+
+  # Egress for the cluster nodes, which have no public address of their own.
+  networking.firewall.extraCommands = ''
+    iptables -t nat -C POSTROUTING -s ${cidr} ! -d ${cidr} -j MASQUERADE 2>/dev/null ||
+      iptables -t nat -A POSTROUTING -s ${cidr} ! -d ${cidr} -j MASQUERADE
+  '';
+  networking.firewall.extraStopCommands = ''
+    iptables -t nat -D POSTROUTING -s ${cidr} ! -d ${cidr} -j MASQUERADE 2>/dev/null || true
+  '';
+
+  # Tailscale's advice for subnet routers: strict reverse-path filtering drops
+  # forwarded tailnet traffic. "server" routing features don't loosen it.
+  networking.firewall.checkReversePath = "loose";
+
+  services.tailscale = {
+    enable = true;
+    # IP forwarding for the advertised routes.
+    useRoutingFeatures = "server";
+    openFirewall = true;
+    authKeyFile = "/etc/nixos/secrets/ts-authkey";
+    extraUpFlags = [
+      "--advertise-routes=${cidr}"
+      "--hostname=${hostname}"
+      "--accept-dns=false"
+      "--ssh"
+    ];
+  };
+
+  # Scraped by the cluster over the private network. Bound to the private
+  # address only; the cluster firewall never opens 9100 publicly.
+  services.prometheus.exporters.node = {
+    enable = ${node_exporter};
+    listenAddress = "${self_ip}";
+    port = 9100;
+    openFirewall = true;
+  };
+  systemd.services.prometheus-node-exporter = lib.mkIf ${node_exporter} {
+    after = [ "network-online.target" ];
+    wants = [ "network-online.target" ];
+    serviceConfig.Restart = lib.mkForce "always";
+    serviceConfig.RestartSec = 5;
+  };
+
+  # HA pair: each router pings the other. When the router the 0.0.0.0/0 route
+  # points at misses three pings, the survivor moves the route to itself
+  # through the Hetzner API. No automatic fail-back.
+  systemd.services.router-failover = lib.mkIf ${ha} {
+    description = "Move the cluster egress route to this router when its peer dies";
+    after = [ "network-online.target" ];
+    wants = [ "network-online.target" ];
+    wantedBy = [ "multi-user.target" ];
+    path = [ pkgs.curl pkgs.iputils pkgs.python3 pkgs.coreutils ];
+    serviceConfig.Restart = "always";
+    serviceConfig.RestartSec = 10;
+    script = ''
+      SELF='${self_ip}'
+      PEER='${peer_ip}'
+      API='https://api.hetzner.cloud/v1/networks/${network_id}'
+      TOKEN="$(cat /etc/nixos/secrets/hcloud-token)"
+      FAILS=0
+      log() { echo "$(date -u +%FT%TZ) $*"; }
+      gateway() {
+        curl -fsS --max-time 10 -H "Authorization: Bearer $TOKEN" "$API" |
+          python3 -c 'import json,sys; r=[x["gateway"] for x in json.load(sys.stdin)["network"]["routes"] if x["destination"]=="0.0.0.0/0"]; print(r[0] if r else "-")'
+      }
+      route() { # route <add_route|delete_route> <gateway>, retried while the network is locked
+        for _ in 1 2 3 4 5 6 7 8 9 10; do
+          curl -fsS --max-time 10 -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+            -d "{\"destination\":\"0.0.0.0/0\",\"gateway\":\"$2\"}" "$API/actions/$1" >/dev/null && return 0
+          sleep 3
+        done
+        return 1
+      }
+      log "watching $PEER from $SELF"
+      while true; do
+        if ping -c1 -W2 "$PEER" >/dev/null 2>&1; then FAILS=0; sleep 5; continue; fi
+        FAILS=$((FAILS + 1))
+        log "peer $PEER missed a ping ($FAILS/3)"
+        if [ "$FAILS" -lt 3 ]; then sleep 5; continue; fi
+        if ! GW="$(gateway)"; then log "cannot read the network from the API"; sleep 10; continue; fi
+        if [ "$GW" = "$PEER" ] || [ "$GW" = "-" ]; then
+          log "taking over 0.0.0.0/0 (was: $GW)"
+          { [ "$GW" = "-" ] || route delete_route "$PEER"; } && route add_route "$SELF" &&
+            log "egress route now points at $SELF" || log "takeover failed, will retry"
+        fi
+        # Already ours: the peer is dead but there is nothing to do — ask the API less often.
+        if [ "$GW" = "$SELF" ]; then sleep 30; else sleep 10; fi
+      done
+    '';
+  };
+}

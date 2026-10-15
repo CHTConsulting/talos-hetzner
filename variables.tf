@@ -747,7 +747,7 @@ variable "subnet_router_location" {
 variable "subnet_router_image" {
   type        = string
   default     = "ubuntu-24.04"
-  description = "OS image for the subnet router VM. Defaults to Ubuntu 24.04 LTS — broadly tested, ships apt + systemd that the default cloud-init script targets. If you override with a non-Debian/Ubuntu image you'll need to adjust the bootstrap commands."
+  description = "Base image the subnet router VM boots once before nixos-infect converts it to NixOS (the router itself is templates/subnet-router.nix.tftpl). Keep a Debian/Ubuntu image: the conversion is tested from Ubuntu 24.04."
 }
 
 variable "subnet_router_node_exporter_enabled" {
