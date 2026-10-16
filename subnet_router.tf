@@ -38,6 +38,10 @@ locals {
     network_id    = local.hcloud_network_id
     ha            = var.subnet_router_ha_enabled ? "true" : "false"
     node_exporter = var.subnet_router_node_exporter_enabled ? "true" : "false"
+    # Updates: the two routers of a pair upgrade on different days.
+    auto_upgrade       = var.subnet_router_auto_upgrade ? "true" : "false"
+    upgrade_schedule   = var.subnet_router_upgrade_schedule[i]
+    tailscale_unstable = var.subnet_router_tailscale_from_unstable ? "true" : "false"
   })]
 
   subnet_router_user_data = [for i in range(local.subnet_router_count) : join("\n", [
@@ -54,7 +58,7 @@ locals {
         "rm -f /etc/hetzner-build",
         "curl -fsSL -o /root/nixos-infect ${local.subnet_router_nixos_infect_url}",
         # Runs only if the script is exactly the pinned one; reboots into NixOS.
-        "echo '${local.subnet_router_nixos_infect_sha256}  /root/nixos-infect' | sha256sum -c - && PROVIDER=hetznercloud-dhcp NIX_CHANNEL=nixos-25.11 NIXOS_IMPORT=./router.nix bash /root/nixos-infect > /var/log/nixos-infect.log 2>&1",
+        "echo '${local.subnet_router_nixos_infect_sha256}  /root/nixos-infect' | sha256sum -c - && PROVIDER=hetznercloud-dhcp NIX_CHANNEL=${var.subnet_router_nixos_channel} NIXOS_IMPORT=./router.nix bash /root/nixos-infect > /var/log/nixos-infect.log 2>&1",
       ]
     })
   ])]

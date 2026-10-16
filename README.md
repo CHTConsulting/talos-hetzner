@@ -24,13 +24,48 @@ Terraform module that deploys a Talos Linux Kubernetes cluster on Hetzner Cloud.
 >   access. `subnet_router_ha_enabled = true` adds a second router (`.11`):
 >   both advertise the CIDR, so Tailscale fails over on its own, and each
 >   pings the other — when the router the `0.0.0.0/0` route points at stops
->   answering for ~15 s, the survivor moves the route to itself through the
+>   answering for ~15 s (detection; the route has moved after ~30 s — 33 s
+>   measured in the e2e test), the survivor moves the route to itself through the
 >   Hetzner API. Each router publishes the state through node_exporter's
 >   textfile collector: `router_egress_active` (1 on the router that carries
 >   egress), `router_peer_up`, `router_failover_takeovers_total` and
 >   `router_failover_last_check_timestamp_seconds` (the route is read back
 >   from the API once a minute). That puts an hcloud token on both VMs, and
 >   Hetzner tokens are project-wide: give the cluster its own project.
+>
+>   **Updates.** The router follows one NixOS release channel
+>   (`subnet_router_nixos_channel`, default `nixos-26.05`). Within it, it
+>   updates itself weekly (`subnet_router_auto_upgrade`, on by default) at
+>   `subnet_router_upgrade_schedule`, and the two routers of a pair do this
+>   on different days, so a bad update never reaches both. After each update
+>   it checks that it still routes (forwarding, NAT, Tailscale up). If not,
+>   it rolls itself back. It never reboots on its own. What needs a human is
+>   exported as metrics: `router_reboot_required`, `router_upgrade_failed`,
+>   `router_upgrade_rollbacks_total`,
+>   `router_upgrade_last_success_timestamp_seconds`, `router_nixos_info` and
+>   `router_nixos_release_eol_timestamp_seconds` (a release gets fixes for
+>   about 7 months). By hand, over Tailscale SSH:
+>
+>   | Command | Does |
+>   |---|---|
+>   | `router-update` | updates within the release, health-checks, rolls back if broken |
+>   | `router-update --reboot` | the same, then reboots if the kernel changed; checked again after boot |
+>   | `router-update --release nixos-26.11` | stages the next release for the next boot (never switched live), reboots; checked after boot, and if it does not route, the router reboots itself into the previous version |
+>
+>   The work runs as `router-update.service`, not in your SSH session: a new
+>   Tailscale restarts `tailscaled`, which is the session you came in on. If it
+>   drops, the update continues (`journalctl -u router-update`). Rollbacks
+>   never evaluate Nix: they flip the system profile back and activate it
+>   outside the unit that detected the problem.
+>
+>   With a pair, run it on the standby first (`router_egress_active == 0`).
+>   Rebooting the active router hands egress to its peer (~15 s to detect,
+>   ~30 s until the route moves — 33 s measured in e2e) and it does
+>   not fail back. Changing `subnet_router_nixos_channel` affects only NEW
+>   routers. `user_data` is ignored after creation, so a running router moves
+>   with `router-update --release` or a `-replace`.
+>   `subnet_router_tailscale_from_unstable = true` takes only the tailscale
+>   package from nixos-unstable, to track upstream Tailscale releases.
 > - **`cluster_access = "private"`** with no public node IPs and no inbound
 >   firewall rules — the Kube and Talos APIs are reachable only over the
 >   tailnet.

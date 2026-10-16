@@ -756,6 +756,40 @@ variable "subnet_router_node_exporter_enabled" {
   description = "If true, cloud-init installs prometheus-node-exporter on the subnet router VM, bound to its private IPv4 only (port 9100). Scrape it from inside the cluster network; the cluster firewall never opens 9100 publicly."
 }
 
+variable "subnet_router_nixos_channel" {
+  type        = string
+  default     = "nixos-26.05"
+  description = "NixOS release channel the subnet router is installed from and follows. A release gets security fixes for about 7 months (router_nixos_release_eol_timestamp_seconds; the hub alerts a month ahead). Changing it affects NEW routers only — move a running one with `router-update --release nixos-YY.MM`, or replace it."
+
+  validation {
+    condition     = can(regex("^nixos-[0-9]{2}\\.(05|11)$", var.subnet_router_nixos_channel))
+    error_message = "subnet_router_nixos_channel must be a NixOS release channel such as \"nixos-26.05\"."
+  }
+}
+
+variable "subnet_router_auto_upgrade" {
+  type        = bool
+  default     = true
+  description = "Weekly automatic `nixos-rebuild switch --upgrade` within the router's release channel, checked afterwards and rolled back if the router stops routing. Never reboots: a new kernel raises router_reboot_required."
+}
+
+variable "subnet_router_upgrade_schedule" {
+  type        = list(string)
+  default     = ["Sun *-*-* 03:30:00", "Wed *-*-* 03:30:00"]
+  description = "systemd OnCalendar for the automatic upgrade, one entry per router (index 1 = the HA pair's -b router). Different days keep a bad update from ever reaching both routers of a pair at once. Times are UTC, with up to 20 min random delay."
+
+  validation {
+    condition     = length(var.subnet_router_upgrade_schedule) == 2
+    error_message = "subnet_router_upgrade_schedule needs exactly two entries (router a, router b)."
+  }
+}
+
+variable "subnet_router_tailscale_from_unstable" {
+  type        = bool
+  default     = false
+  description = "Take only the tailscale package from nixos-unstable, so the router follows upstream Tailscale releases instead of the NixOS release's (usually a few minor versions behind). The rest of the system stays on subnet_router_nixos_channel."
+}
+
 variable "subnet_router_ha_enabled" {
   type        = bool
   default     = false

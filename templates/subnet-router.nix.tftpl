@@ -3,10 +3,62 @@
 # writes when it turns the Ubuntu base image into NixOS. To change a running
 # router: edit /etc/nixos/router.nix and `nixos-rebuild switch` (rollback:
 # `nixos-rebuild switch --rollback`), or let Terraform replace the VM.
+# Updates (README, "Updating the subnet router"): automatic, staggered across
+# a pair, rolled back if the router stops routing; reboots and release
+# upgrades are `router-update` by hand, standby first.
 #
 # Secrets never enter this file: they sit in /etc/nixos/secrets (0600),
 # written by cloud-init next to it.
-{ lib, pkgs, ... }:
+{ config, lib, pkgs, ... }:
+let
+  # "Is this still a router?" — after every upgrade, automatic or by hand.
+  # Forwarding on, NAT rule in place, tailscaled up and logged in.
+  routerHealthy = pkgs.writeShellScript "router-healthy" ''
+    export PATH=/run/current-system/sw/bin:/run/current-system/sw/sbin:$PATH
+    [ "$(cat /proc/sys/net/ipv4/ip_forward)" = 1 ] || { echo "ip_forward is off"; exit 1; }
+    iptables -t nat -C POSTROUTING -s ${cidr} ! -d ${cidr} -j MASQUERADE 2>/dev/null || { echo "egress NAT rule missing"; exit 1; }
+    systemctl is-active --quiet tailscaled || { echo "tailscaled is not running"; exit 1; }
+    tailscale status --json 2>/dev/null | grep -q '"BackendState": *"Running"' || { echo "tailscale is not logged in"; exit 1; }
+  '';
+
+  # Wait up to two minutes for the router to settle after a switch; if it is
+  # still unhealthy, roll back to the previous generation and count it.
+  # `verify-or-rollback boot` (after a reboot): roll back by making the
+  # previous generation the boot default and rebooting into it.
+  verifyOrRollback = pkgs.writeShellScript "router-verify-or-rollback" ''
+    export PATH=/run/current-system/sw/bin:/run/current-system/sw/sbin:$PATH
+    MODE="''$${1:-switch}"
+    STATE=/var/lib/router-metrics/upgrade.state
+    LAST=0 ROLLBACKS=0
+    [ -f "$STATE" ] && . "$STATE"
+    for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
+      if $${routerHealthy}; then
+        printf 'LAST=%s\nROLLBACKS=%s\n' "$(date +%s)" "$ROLLBACKS" > "$STATE.tmp" && mv "$STATE.tmp" "$STATE"
+        echo "router healthy on $(cat /run/current-system/nixos-version)"
+        exit 0
+      fi
+      sleep 10
+    done
+    echo "router unhealthy — rolling back to the previous generation"
+    printf 'LAST=%s\nROLLBACKS=%s\n' "$LAST" "$((ROLLBACKS + 1))" > "$STATE.tmp" && mv "$STATE.tmp" "$STATE"
+    # What `nixos-rebuild switch --rollback` does, minus the evaluation it
+    # starts with (which needs NIX_PATH — absent in a systemd service).
+    nix-env -p /nix/var/nix/profiles/system --rollback
+    if [ "$MODE" = boot ]; then
+      /nix/var/nix/profiles/system/bin/switch-to-configuration boot
+      echo "previous generation is the boot default — rebooting into it"
+      systemctl reboot
+    else
+      # Activated OUTSIDE this unit: the previous generation defines the unit
+      # running this script differently, so the switch stops it — and would
+      # kill a switch running inside it halfway.
+      systemd-run --unit=router-rollback --collect --no-block --service-type=oneshot \
+        $${pkgs.runtimeShell} -c '/nix/var/nix/profiles/system/bin/switch-to-configuration switch; systemctl restart systemd-sysctl.service'
+      echo "previous generation activating (router-rollback.service)"
+    fi
+    exit 1
+  '';
+in
 {
   # Hetzner hands out both the public and the private address over DHCP,
   # including the classless route to the private network.
@@ -33,6 +85,12 @@
 
   services.tailscale = {
     enable = true;
+    # Tailscale moves faster than a NixOS release: 26.05 ships 1.98.x while
+    # upstream is on 1.102.x. subnet_router_tailscale_from_unstable takes just
+    # this package from nixos-unstable (binary-cached; the rest of the system
+    # stays on the release). The weekly autoUpgrade picks up new versions.
+    package = lib.mkIf ${tailscale_unstable}
+      (import (builtins.fetchTarball "https://channels.nixos.org/nixos-unstable/nixexprs.tar.xz") { }).tailscale;
     # IP forwarding for the advertised routes.
     useRoutingFeatures = "server";
     openFirewall = true;
@@ -54,10 +112,11 @@
     openFirewall = true;
     # router-failover writes the egress state here (router_egress_active and
     # friends), so the dashboard shows which router carries the traffic.
-    enabledCollectors = lib.optionals ${ha} [ "textfile" ];
-    extraFlags = lib.optionals ${ha} [ "--collector.textfile.directory=/var/lib/router-metrics" ];
+    # router-failover (HA) and router-update-metrics write their state here.
+    enabledCollectors = [ "textfile" ];
+    extraFlags = [ "--collector.textfile.directory=/var/lib/router-metrics" ];
   };
-  systemd.tmpfiles.rules = lib.optionals ${ha} [ "d /var/lib/router-metrics 0755 root root -" ];
+  systemd.tmpfiles.rules = [ "d /var/lib/router-metrics 0755 root root -" ];
   systemd.services.prometheus-node-exporter = lib.mkIf ${node_exporter} {
     after = [ "network-online.target" ];
     wants = [ "network-online.target" ];
@@ -149,4 +208,202 @@
       done
     '';
   };
+
+  # ---- Updates -----------------------------------------------------------
+  # The router follows ONE NixOS release channel (subnet_router_nixos_channel,
+  # set at install by nixos-infect; `nix-channel --list` shows it). A release
+  # gets security fixes for ~7 months; router_nixos_release_eol_timestamp_seconds
+  # says when, and the hub alerts a month ahead. Moving to the next release is
+  # deliberate: `router-update --release nixos-YY.MM`.
+  #
+  # Within the release, updates are automatic: a weekly `nixos-rebuild switch
+  # --upgrade` at subnet_router_upgrade_schedule (the two routers of a pair on
+  # different days, so a bad update can never take both). After it, the router
+  # checks it still routes and rolls back if not. It never reboots on its own —
+  # a reboot drops egress for a single router; a new kernel raises
+  # router_reboot_required and waits for `router-update --reboot`.
+  system.autoUpgrade = {
+    enable = ${auto_upgrade};
+    dates = "${upgrade_schedule}";
+    randomizedDelaySec = "20min";
+    persistent = true;
+    allowReboot = false;
+  };
+  systemd.services.nixos-upgrade.onSuccess = lib.optionals ${auto_upgrade} [ "router-upgrade-check.service" ];
+  # After a reboot that router-update asked for (a release upgrade or a new
+  # kernel): same check, once. If the router does not route after booting the
+  # new version, roll back and reboot into the previous one.
+  systemd.services.router-boot-check = {
+    description = "After an upgrade reboot: still a router? If not, roll back";
+    wantedBy = [ "multi-user.target" ];
+    after = [ "network-online.target" "tailscaled.service" ];
+    wants = [ "network-online.target" ];
+    unitConfig.ConditionPathExists = "/var/lib/router-metrics/pending-boot-check";
+    serviceConfig.Type = "oneshot";
+    script = ''
+      rm -f /var/lib/router-metrics/pending-boot-check
+      exec $${verifyOrRollback} boot
+    '';
+  };
+  systemd.services.router-upgrade-check = {
+    description = "After an automatic upgrade: still a router? If not, roll back";
+    serviceConfig.Type = "oneshot";
+    script = "exec $${verifyOrRollback}";
+  };
+
+  # Old generations: keep 30 days of rollbacks, and the boot menu short.
+  nix.gc = {
+    automatic = true;
+    dates = "weekly";
+    options = "--delete-older-than 30d";
+  };
+  nix.settings.auto-optimise-store = true;
+  boot.loader.grub.configurationLimit = 10;
+  boot.loader.systemd-boot.configurationLimit = 10;
+
+  # Update state for the dashboard and the hub's alerts, every five minutes.
+  systemd.services.router-update-metrics = {
+    description = "Publish NixOS update state for node_exporter";
+    serviceConfig.Type = "oneshot";
+    path = [ "/run/current-system/sw" ];
+    script = ''
+      PROM=/var/lib/router-metrics/updates.prom
+      STATE=/var/lib/router-metrics/upgrade.state
+      LAST=0 ROLLBACKS=0
+      [ -f "$STATE" ] && . "$STATE"
+      VERSION="$(cat /run/current-system/nixos-version)"
+      RELEASE="$(echo "$VERSION" | cut -d. -f1-2)"
+      CHANNEL="$(nix-channel --list | sed -n 's|^nixos .*/||p')"
+      # A release YY.MM is supported until the end of month MM+7.
+      YY="$(echo "$RELEASE" | cut -d. -f1)" MM="$(echo "$RELEASE" | cut -d. -f2 | sed 's/^0//')"
+      M=$((MM + 7)) Y=$((2000 + YY))
+      if [ "$M" -gt 12 ]; then M=$((M - 12)) Y=$((Y + 1)); fi
+      EOL="$(date -u -d "$(printf '%04d-%02d-01' "$Y" "$M") +1 month -1 second" +%s)"
+      REBOOT=0
+      for f in kernel kernel-modules initrd; do
+        [ "$(readlink -f /run/booted-system/$f)" = "$(readlink -f /nix/var/nix/profiles/system/$f)" ] || REBOOT=1
+      done
+      FAILED=0
+      systemctl is-failed --quiet nixos-upgrade.service && FAILED=1
+      systemctl is-failed --quiet router-upgrade-check.service && FAILED=1
+      {
+        echo '# HELP router_nixos_info Running NixOS version and the channel it follows.'
+        echo '# TYPE router_nixos_info gauge'
+        echo "router_nixos_info{version=\"$VERSION\",release=\"$RELEASE\",channel=\"$CHANNEL\"} 1"
+        echo '# HELP router_nixos_release_eol_timestamp_seconds End of security support for the running release.'
+        echo '# TYPE router_nixos_release_eol_timestamp_seconds gauge'
+        echo "router_nixos_release_eol_timestamp_seconds $EOL"
+        echo '# HELP router_reboot_required 1 if a newer kernel/initrd is installed than the one running.'
+        echo '# TYPE router_reboot_required gauge'
+        echo "router_reboot_required $REBOOT"
+        echo '# HELP router_upgrade_failed 1 if the last automatic upgrade or its health check failed.'
+        echo '# TYPE router_upgrade_failed gauge'
+        echo "router_upgrade_failed $FAILED"
+        echo '# HELP router_upgrade_last_success_timestamp_seconds Last upgrade that left the router healthy.'
+        echo '# TYPE router_upgrade_last_success_timestamp_seconds gauge'
+        echo "router_upgrade_last_success_timestamp_seconds $LAST"
+        echo '# HELP router_upgrade_rollbacks_total Upgrades rolled back because the router stopped routing.'
+        echo '# TYPE router_upgrade_rollbacks_total counter'
+        echo "router_upgrade_rollbacks_total $ROLLBACKS"
+      } > "$PROM.tmp" && mv "$PROM.tmp" "$PROM"
+    '';
+  };
+  systemd.timers.router-update-metrics = {
+    wantedBy = [ "timers.target" ];
+    timerConfig = {
+      OnBootSec = "1min";
+      OnUnitActiveSec = "5min";
+    };
+  };
+
+  # The by-hand path, over Tailscale SSH (root@<router>):
+  #   router-update                          updates within the release, checked
+  #   router-update --reboot                 also reboots if the kernel changed
+  #   router-update --release nixos-26.11    stages the next release, reboots,
+  #                                          checks after boot (rolls back if broken)
+  # The work runs as router-update.service, not in your SSH session: a new
+  # Tailscale restarts tailscaled — and with it the session you came in on.
+  # Your terminal just follows the log; if it drops, the update carries on
+  # (journalctl -u router-update). A pair: standby first (router_egress_active
+  # == 0); rebooting the active one moves egress to its peer (~30 s), no fail-back.
+  environment.systemPackages = [
+    (pkgs.writeShellScriptBin "router-update" ''
+      set -eu
+      export PATH=/run/current-system/sw/bin:/run/current-system/sw/sbin:$PATH
+      export NIX_PATH="$${lib.concatStringsSep ":" config.nix.nixPath}"
+      STATUS=/run/router-update.status
+
+      if [ "''$${ROUTER_UPDATE_WORKER:-}" != 1 ]; then
+        # Front end: start the worker as a unit and follow its log.
+        case "''$${1:-}" in -h|--help) echo "usage: router-update [--release nixos-YY.MM] [--reboot]"; exit 0 ;; esac
+        if systemctl is-active --quiet router-update.service; then
+          echo "router-update is already running — following it"
+        else
+          systemctl reset-failed router-update.service 2>/dev/null || true
+          rm -f "$STATUS"
+          systemd-run --unit=router-update --no-block --property=Type=oneshot \
+            --setenv=ROUTER_UPDATE_WORKER=1 "$(readlink -f "$0")" "$@"
+        fi
+        journalctl -fu router-update -o cat --since "-5s" &
+        FOLLOW=$!
+        sleep 2
+        while systemctl is-active --quiet router-update.service ||
+          [ "$(systemctl show -p ActiveState --value router-update.service)" = activating ]; do
+          sleep 2
+        done
+        sleep 1
+        kill "$FOLLOW" 2>/dev/null || true
+        RESULT="$(cat "$STATUS" 2>/dev/null || echo "unknown — journalctl -u router-update")"
+        echo "== result: $RESULT"
+        case "$RESULT" in ok*|reboot*) exit 0 ;; *) exit 1 ;; esac
+      fi
+
+      # Worker (router-update.service).
+      RELEASE="" REBOOT=no
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          --release) RELEASE="$2"; shift 2 ;;
+          --reboot) REBOOT=yes; shift ;;
+          *) echo "failed: usage: router-update [--release nixos-YY.MM] [--reboot]" > "$STATUS"; exit 2 ;;
+        esac
+      done
+      fail() { echo "failed: $*" > "$STATUS"; echo "== FAILED: $*"; exit 1; }
+
+      if [ -n "$RELEASE" ]; then
+        echo "$RELEASE" | grep -Eq '^nixos-[0-9]{2}\.(05|11)$' || fail "not a release channel: $RELEASE"
+        echo "== moving to $RELEASE (running $(cat /run/current-system/nixos-version))"
+        nix-channel --add "https://channels.nixos.org/$RELEASE" nixos
+        nix-channel --update nixos || fail "channel update"
+        # A new release is never switched live: systemd, tailscaled and the
+        # kernel all change at once. Stage it for the next boot, reboot, and
+        # router-boot-check verifies it — rolling back and rebooting if not.
+        nixos-rebuild boot || fail "nixos-rebuild boot"
+        touch /var/lib/router-metrics/pending-boot-check
+        echo "reboot: $RELEASE staged, checked after boot" > "$STATUS"
+        echo "== $RELEASE staged — rebooting; router-boot-check verifies it after boot"
+        systemctl reboot
+        exit 0
+      fi
+
+      echo "== updating within $(nix-channel --list | sed -n 's|^nixos .*/||p') (running $(cat /run/current-system/nixos-version))"
+      nix-channel --update nixos || fail "channel update"
+      nixos-rebuild switch || fail "nixos-rebuild switch"
+      $${verifyOrRollback} || fail "router unhealthy after the update — rolled back"
+      systemctl start router-update-metrics.service || true
+      NEED=no
+      for f in kernel kernel-modules initrd; do
+        [ "$(readlink -f /run/booted-system/$f)" = "$(readlink -f /nix/var/nix/profiles/system/$f)" ] || NEED=yes
+      done
+      if [ "$NEED" = no ]; then echo "ok: up to date, no reboot needed" > "$STATUS"; echo "== up to date, no reboot needed"; exit 0; fi
+      if [ "$REBOOT" = yes ]; then
+        touch /var/lib/router-metrics/pending-boot-check
+        echo "reboot: new kernel, checked after boot" > "$STATUS"
+        echo "== new kernel — rebooting"
+        systemctl reboot
+        exit 0
+      fi
+      echo "ok: new kernel installed — reboot when convenient (router-update --reboot; standby first)" > "$STATUS"
+      echo "== new kernel installed: reboot when convenient (router-update --reboot; standby first)"
+    '')
+  ];
 }
