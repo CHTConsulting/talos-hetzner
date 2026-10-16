@@ -33,7 +33,9 @@ Terraform module that deploys a Talos Linux Kubernetes cluster on Hetzner Cloud.
 >   from the API once a minute). That puts an hcloud token on both VMs, and
 >   Hetzner tokens are project-wide: give the cluster its own project.
 >
->   **Updates.** The router follows one NixOS release channel
+>   **Updates (on `main` only, not in `v1.0.0`).** A fresh install on the
+>   new `nixos-26.05` default currently does not join the tailnet — pin
+>   `?ref=v1.0.0` until this ships as `v1.1.0`. The router follows one NixOS release channel
 >   (`subnet_router_nixos_channel`, default `nixos-26.05`). Within it, it
 >   updates itself weekly (`subnet_router_auto_upgrade`, on by default) at
 >   `subnet_router_upgrade_schedule`, and the two routers of a pair do this
@@ -85,9 +87,8 @@ Terraform module that deploys a Talos Linux Kubernetes cluster on Hetzner Cloud.
 >   drifts from a base git ref.
 >
 > Attribution and the full list of changes: [NOTICE.md](NOTICE.md). The
-> documentation below comes from upstream and still describes the module
-> surface accurately; features we removed are gone from `variables.tf` too, so
-> when in doubt the code is the reference.
+> documentation below is adapted from upstream and covers only what this fork
+> ships; when in doubt, `variables.tf` is the reference.
 
 <!-- Table of Contents -->
 # 📔 Overview
@@ -95,15 +96,14 @@ Terraform module that deploys a Talos Linux Kubernetes cluster on Hetzner Cloud.
 - [🚀 Getting Started](#-getting-started)
 - [⚙️ Advanced Configuration](#%EF%B8%8F-advanced-configuration)
 - [♻️ Lifecycle](#%EF%B8%8F-lifecycle)
-- [❤️ Support this Project](#%EF%B8%8F-support-this-project)
 - [👋 Community](#-community)
-- [📎 Project Info](#-project-info)
+- [⚖️ License](#%EF%B8%8F-license)
 
 <!-- About the Project -->
 ## 🌟 About the Project
-Hcloud Kubernetes is a Terraform module for deploying a fully declarative, managed Kubernetes cluster on Hetzner Cloud. It utilizes Talos, a secure, immutable, and minimal operating system specifically designed for Kubernetes, featuring a streamlined architecture with only a handful of binaries and shared libraries. Just enough to run containerd and a small set of system services.
+talos-hetzner is a Terraform module for deploying a fully declarative, managed Kubernetes cluster on Hetzner Cloud — including fully private clusters reachable only over Tailscale. It utilizes Talos, a secure, immutable, and minimal operating system specifically designed for Kubernetes, featuring a streamlined architecture with only a handful of binaries and shared libraries. Just enough to run containerd and a small set of system services.
 
-This project is committed to production-grade configuration and lifecycle management, ensuring all components are set up for high availability. It includes a curated selection of widely used and officially recognized Kubernetes components. If you encounter any issues, suboptimal settings, or missing elements, please file an [issue](https://github.com/hcloud-k8s/terraform-hcloud-kubernetes/issues) to help us improve this project.
+It is the module behind a two-cluster production platform (an observability hub and a multi-tenant cluster) and keeps only the components that platform uses. Issues and suggestions: [this repository's issues](https://github.com/CHTConsulting/talos-hetzner/issues).
 
 <!-- Features -->
 ### ✨ Features
@@ -115,7 +115,8 @@ Provision a highly available and secure Kubernetes cluster on Hetzner Cloud, def
 * **Bare Metal Server:** Provides fully managed integration of **Hetzner Bare Metal Servers** into the cluster.
 * **High Availability:** High availability across control plane and worker components for reliable operation.
 * **Autoscaling:** Supports automatic scaling of both **Nodes** and **Pods** to seamlessly handle dynamic workloads.
-* **Quick Start:** Optional **Gateway API**, **Cert Manager**, and **Longhorn** integrations for faster app deployment.
+* **Private by default if you want it:** `cluster_access = "private"` with no public node IPs, a Tailscale **subnet router** (optionally an HA pair) for access and egress.
+* **Gateway API:** Optional **Cilium Gateway API** behind a Hetzner load balancer.
 * **Dual-Stack:** Load balancers provide native **IPv4** and **IPv6** connectivity with **PROXY Protocol** support.
 * **Isolated Network:** Keeps all internal cluster traffic confined to an isolated, private Hetzner Cloud Network.
 * **Security:** Security-first architecture with perimeter firewalls and encryption for data in transit and at rest.
@@ -144,11 +145,6 @@ This project bundles essential Kubernetes components, preconfigured for seamless
   </summary>
   Provides persistent storage for Kubernetes using Hetzner Cloud Volumes, supporting encryption and dynamic provisioning.
 - <summary>
-    <img align="absmiddle" alt="Longhorn" src="https://www.google.com/s2/favicons?domain=longhorn.io&sz=32" width="18">
-    <b><a href="https://longhorn.io">Longhorn</a></b>
-  </summary>
-  Distributed block storage for Kubernetes, providing high availability, snapshots, and automatic replica rebuilding for easy persistent volume management.
-- <summary>
     <img align="absmiddle" alt="Cilium Container Network Interface" src="https://www.google.com/s2/favicons?domain=cilium.io&sz=32" width="18">
     <b><a href="https://cilium.io">Cilium Container Network Interface (CNI)</a></b>
   </summary>
@@ -158,16 +154,6 @@ This project bundles essential Kubernetes components, preconfigured for seamless
     <b><a href="https://cilium.io/use-cases/gateway-api/">Cilium Gateway API</a></b>
   </summary>
   Cilium Gateway API implements the Kubernetes Gateway API using eBPF for traffic steering and policy enforcement, with Envoy providing Layer 7 proxying for HTTP and TLS routing.
-- <summary>
-    <img align="absmiddle" alt="Cert Manager" src="https://www.google.com/s2/favicons?domain=cert-manager.io&sz=32" width="18">
-    <b><a href="https://cert-manager.io">Cert Manager</a></b>
-  </summary>
-  Automates the management of certificates in Kubernetes, handling the issuance and renewal of certificates from various sources like Let's Encrypt, and ensures certificates are valid and updated.
-- <summary>
-    <img align="absmiddle" alt="Cert Manager Webhook Hetzner" src="https://www.google.com/s2/favicons?domain=hetzner.com&sz=32" width="18">
-    <b><a href="https://github.com/hetzner/cert-manager-webhook-hetzner">Cert Manager Webhook Hetzner</a></b>
-  </summary>
-  Adds Hetzner DNS support for Cert Manager ACME DNS-01 challenges, including wildcard certificates and certificates that do not depend on public HTTP routing.
 - <summary>
     <img align="absmiddle" alt="Cluster Autoscaler" src="https://www.google.com/s2/favicons?domain=kubernetes.io&sz=32" width="18">
     <b><a href="https://github.com/kubernetes/autoscaler/tree/master/cluster-autoscaler">Cluster Autoscaler</a></b>
@@ -223,8 +209,7 @@ module "kubernetes" {
   cluster_kubeconfig_path  = "kubeconfig"
   cluster_talosconfig_path = "talosconfig"
 
-  # Enable Cilium Gateway API and Cert Manager (optional)
-  cert_manager_enabled       = true
+  # Enable Cilium Gateway API (optional)
   cilium_gateway_api_enabled = true
 
   control_plane_nodepools = [
@@ -517,14 +502,11 @@ The module installs a curated set of Kubernetes components through Talos manifes
 
 #### Optional Components
 
-| Component                    | Variable                               | Default |
-| ---------------------------- | -------------------------------------- | ------- |
-| Cert Manager                 | `cert_manager_enabled`                 | `false` |
-| Cert Manager Hetzner Webhook | `cert_manager_webhook_hetzner_enabled` | `false` |
-| Cilium Gateway API           | `cilium_gateway_api_enabled`           | `false` |
-| Cluster Autoscaler           | `cluster_autoscaler_enabled`           | `false` |
-| Ingress NGINX (deprecated)   | `ingress_nginx_enabled`                | `false` |
-| Longhorn                     | `longhorn_enabled`                     | `false` |
+| Component          | Variable                     | Default |
+| ------------------ | ---------------------------- | ------- |
+| Cilium Gateway API | `cilium_gateway_api_enabled` | `false` |
+| Cluster Autoscaler | `cluster_autoscaler_enabled` | `false` |
+| Subnet router      | `subnet_router_enabled`      | `false` |
 
 
 #### Custom Resource Definitions
@@ -715,100 +697,25 @@ For access to Talos and the Kubernetes API, please refer to the [Cluster Access]
 
 Kubernetes Gateway API is the modern replacement for Kubernetes Ingress. It fixes many Ingress limitations by offering a richer, more consistent model for traffic management, and it's designed to support multiple [Gateway API implementations](https://gateway-api.sigs.k8s.io/implementations/#conformant) in parallel.
 
-This module installs the Gateway API CRDs by default and deploys Cert Manager with Gateway API support enabled.
+This module installs the Gateway API CRDs by default. It does not install Cert Manager: bring the TLS secret yourself — from a Cert Manager you install, or, as in the platform this fork serves, a Cloudflare Origin CA certificate synced into the cluster.
 
-### Example with Cilium Gateway API and Cert Manager TLS Certificate
+### Example with Cilium Gateway API
 
 To use Cilium's Gateway API implementation, configure:
 ```hcl
 cilium_gateway_api_enabled = true
 ```
 
-If Cert Manager and Cilium weren't initially deployed/configured with Gateway API support enabled, you may need to restart their controllers to pick up the new configuration:
+If Cilium wasn't initially deployed with Gateway API support enabled, restart its operator to pick up the new configuration:
 ```shell
-kubectl -n cert-manager rollout restart deployment
 kubectl -n kube-system rollout restart deployment/cilium-operator
 ```
 
-#### Create a Cert Manager `Issuer` (Let's Encrypt HTTP-01 via Gateway API)
-
-`Issuer` configures Cert Manager to request TLS certificates from Let's Encrypt using the ACME `HTTP-01` challenge. The important part is the `gatewayHTTPRoute` solver: when Cert Manager needs to prove domain ownership, it will temporarily create/attach an HTTPRoute under the referenced `Gateway` and serve the `/.well-known/acme-challenge/...` response there.
-
-Replace the placeholder email address, and note that `privateKeySecretRef` is the secret where Cert Manager stores your ACME account key (not the issued certificate).
-
-```yaml
-apiVersion: cert-manager.io/v1
-kind: Issuer
-metadata:
-  name: letsencrypt-http01
-  namespace: default
-spec:
-  acme:
-    email: <user@example.com>
-    server: https://acme-v02.api.letsencrypt.org/directory
-    privateKeySecretRef:
-      name: letsencrypt-http01-key
-    solvers:
-      - http01:
-          gatewayHTTPRoute:
-            parentRefs:
-              - name: cilium-gateway
-                namespace: default
-                kind: Gateway
-```
-
-#### Optional: Create a Cert Manager `ClusterIssuer` (Let's Encrypt DNS-01 via Hetzner DNS)
-
-To request wildcard certificates or certificates that do not depend on public HTTP routing, enable the Hetzner DNS webhook:
-
-```hcl
-cert_manager_enabled                 = true
-cert_manager_webhook_hetzner_enabled = true
-```
-
-Your DNS zone must be managed by Hetzner DNS. Create a Secret containing a Hetzner API token with permission to create and remove DNS records. For `ClusterIssuer` resources, place the Secret in the cert-manager cluster resource namespace, which defaults to `cert-manager`.
-
-```yaml
-apiVersion: v1
-kind: Secret
-metadata:
-  name: hetzner
-  namespace: cert-manager
-stringData:
-  token: <hetzner-dns-token>
-```
-
-```yaml
-apiVersion: cert-manager.io/v1
-kind: ClusterIssuer
-metadata:
-  name: letsencrypt-dns01
-spec:
-  acme:
-    email: <user@example.com>
-    server: https://acme-v02.api.letsencrypt.org/directory
-    privateKeySecretRef:
-      name: letsencrypt-dns01-key
-    solvers:
-      - dns01:
-          webhook:
-            groupName: acme.hetzner.com
-            solverName: hetzner
-            config:
-              tokenSecretKeyRef:
-                name: hetzner
-                key: token
-```
-
-When using this `ClusterIssuer` with the Gateway shim, replace `cert-manager.io/issuer: letsencrypt-http01` with `cert-manager.io/cluster-issuer: letsencrypt-dns01`.
-
-#### Create the `Gateway` (Cilium GatewayClass + Hetzner LB + Cert Manager integration)
+#### Create the `Gateway` (Cilium GatewayClass + Hetzner LB)
 
 A `Gateway` defines the external entry point for traffic. With `gatewayClassName: cilium`, the resource is reconciled by the Cilium Gateway controller. The `infrastructure.annotations` are passed through as Hetzner-specific load balancer settings (interpreted by the Hetzner Cloud Controller Manager) to control how the Hetzner Cloud LB is created and configured. See: [Load Balancer Annotations](https://github.com/hetznercloud/hcloud-cloud-controller-manager/blob/main/docs/reference/load_balancer_annotations.md)
 
-The `cert-manager.io/issuer: letsencrypt-http01` annotation is used by Cert Manager's Gateway shim so it knows which Issuer to use when populating the TLS secret referenced by the listener.
-
-`tls.certificateRefs` points at the Kubernetes Secret that will contain the issued certificate and private key (`example-com-tls`). Cert Manager will keep that secret up to date, and the Gateway will use it to terminate TLS.
+`tls.certificateRefs` points at the Kubernetes Secret with the certificate and private key (`example-com-tls`); the Gateway uses it to terminate TLS.
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1
@@ -816,8 +723,6 @@ kind: Gateway
 metadata:
   name: cilium-gateway
   namespace: default
-  annotations:
-    cert-manager.io/issuer: letsencrypt-http01
 spec:
   gatewayClassName: cilium
   infrastructure:
@@ -880,62 +785,6 @@ spec:
 > ```shell
 > kubectl -n kube-system rollout restart deployment/cilium-operator
 > ```
-
-</details>
-
-<!-- Ingress Load Balancer -->
-<details>
-<summary><b>Ingress Load Balancer</b></summary>
-
-The ingress controller uses a default load balancer service to manage external traffic. For geo-redundancy and high availability, `ingress_load_balancer_pools` can be configured as an alternative, replacing the default load balancer with the specified pool of load balancers.
-
-##### Configuring Load Balancer Pools
-To replace the default load balancer, use `ingress_load_balancer_pools` in the Terraform configuration. This setup ensures high availability and geo-redundancy by distributing traffic from various locations across all targets in all regions.
-
-Example `kubernetes.tf` configuration:
-```hcl
-ingress_load_balancer_pools = [
-  {
-    name     = "lb-nbg"
-    location = "nbg1"
-    type     = "lb11"
-  },
-  {
-    name     = "lb-fsn"
-    location = "fsn1"
-    type     = "lb11"
-  }
-]
-```
-
-##### Local Traffic Optimization
-Configuring local traffic handling enhances network efficiency by reducing latency. Processing traffic closer to its source eliminates unnecessary routing delays, ensuring consistent performance for low-latency or region-sensitive applications.
-
-Example `kubernetes.tf` configuration:
-```hcl
-ingress_nginx_kind = "DaemonSet"
-ingress_nginx_service_external_traffic_policy = "Local"
-
-ingress_load_balancer_pools = [
-  {
-    name          = "regional-lb-nbg"
-    location      = "nbg1"
-    local_traffic = true
-  },
-  {
-    name          = "regional-lb-fsn"
-    location      = "fsn1"
-    local_traffic = true
-  }
-]
-```
-
-Key settings in this configuration:
-- `local_traffic`: Limits load balancer targets to nodes in the same geographic location as the load balancer, reducing data travel distances and keeping traffic within the region.
-- `ingress_nginx_service_external_traffic_policy` set to `Local`: Ensures external traffic is handled directly on the local node, avoiding extra network hops.
-- `ingress_nginx_kind` set to `DaemonSet`: Deploys an ingress controller instance on every node, enabling requests to be handled locally for faster response times.
-
-Topology-aware routing in ingress-nginx can optionally be enabled by setting the `ingress_nginx_topology_aware_routing` variable to `true`. This functionality routes traffic to the nearest upstream endpoints, enhancing efficiency for supported services. Note that this feature is only applicable to services that support topology-aware routing. For more information, refer to the [Kubernetes documentation](https://kubernetes.io/docs/concepts/services-networking/topology-aware-routing/).
 
 </details>
 
@@ -1037,28 +886,6 @@ StorageClasses created by the Hcloud CSI driver are immutable. To change paramet
 
 For more details, see the [HCloud CSI Driver documentation](https://github.com/hetznercloud/csi-driver/tree/main/docs/kubernetes).
 
-
-#### Longhorn
-
-Longhorn is a lightweight, reliable, and easy-to-use distributed block storage system for Kubernetes.
-It is fully independent from the Hetzner Cloud CSI driver.
-
-You can enable Longhorn and configure it as the default StorageClass for your cluster via module variables:
-
-* **Enable Longhorn:**
-  Set `longhorn_enabled` to `true` to deploy Longhorn in your cluster.
-
-* **Default StorageClass:**
-  Set `longhorn_default_storage_class` to `true` if you want Longhorn to be the default StorageClass.
-
-**Example:**
-
-```hcl
-longhorn_enabled               = true
-longhorn_default_storage_class = true
-```
-
-For more information about Longhorn, see the [Longhorn documentation](https://longhorn.io/docs/).
 
 </details>
 
@@ -1178,10 +1005,10 @@ This module uses the discovery service to perform additional health checks durin
 
 ```hcl
 # Disable Kubernetes-based discovery (deprecated in Kubernetes >= 1.32)
-talos_kubernetes_discovery_service_enabled = false
+talos_discovery_kubernetes_enabled = false   # not available on Talos 1.14
 
 # Enable the external Sidero Labs discovery service (default)
-talos_siderolabs_discovery_service_enabled = true
+talos_discovery_service_enabled = true
 ```
 
 For more details, refer to the [official Talos discovery guide](https://www.talos.dev/latest/talos-guides/discovery/).
@@ -1414,43 +1241,17 @@ talos_certificates = {
 
 <!-- Lifecycle -->
 ## ♻️ Lifecycle
-This module manages the versions of Talos, Kubernetes, and all bundled [components](#-components) together. Each Hcloud K8s major version targets a defined Talos and Kubernetes minor version, while component versions are selected for compatibility with that Kubernetes release.
+This module manages the versions of Talos, Kubernetes, and all bundled [components](#-components) together: each release pins a Talos and Kubernetes version plus component versions selected for compatibility with them.
 
-### 📌 Hcloud Kubernetes Versions
-> [!NOTE]
-> **This fork has its own version line.** `v1.x` is based on upstream
-> **5.10.0** and defaults to Talos **v1.14.1**, with Talos 1.13 still
-> supported (see the fork notes at the top). The table below is upstream's
-> and describes upstream releases.
+### 📌 Versions
+This fork has its own version line, independent of upstream's numbering.
 
-The table below lists the Talos and Kubernetes versions used by each Hcloud K8s version.
-
-| Hcloud K8s | Talos Linux | Kubernetes |
-| :--------: | :---------: | :--------: |
-|  **(7)**   |   (1.15)    |    1.36    |
-|  **(6)**   |    1.14     |    1.35    |
-|   **5**    |    1.13     |    1.34    |
-<!--
-|   **4**    |    1.12     |    1.33    |
-|   **3**    |    1.11     |    1.33    |
-|   **2**    |     1.9     |    1.32    |
-|   **1**    |     1.8     |    1.31    |
-|   **0**    |     1.7     |    1.30    |
--->
-
-Parenthesized versions are planned targets.
-
-### ☑️ Kubernetes Compatibility Matrix
-The table below lists the **minimum required versions** of each component to support the specified Kubernetes release.
-
-| Kubernetes | Hcloud CCM  | Hcloud CSI  |  Longhorn   |    Cilium     | Cert Manager | Hetzner Webhook |
-| :--------: | :---------: | :---------: | :---------: | :-----------: | :----------: | :-------------: |
-|  **1.36**  | ≥&nbsp;1.31 | ≥&nbsp;2.21 | ≥&nbsp;1.12 |  ≥&nbsp;1.20  | ≥&nbsp;1.21  |   ≥&nbsp;0.8    |
-|  **1.35**  | ≥&nbsp;1.30 | ≥&nbsp;2.19 | ≥&nbsp;1.11 | ≥&nbsp;1.19.2 | ≥&nbsp;1.19  |  ≥&nbsp;0.6.4   |
-|  **1.34**  | ≥&nbsp;1.27 | ≥&nbsp;2.18 | ≥&nbsp;1.11 |  ≥&nbsp;1.19  | ≥&nbsp;1.19  |  ≥&nbsp;0.6.1   |
+| talos-hetzner | Based on upstream | Talos Linux (default) | Kubernetes (default) |
+| :-----------: | :---------------: | :-------------------: | :------------------: |
+|   **1.0.0**   |      5.10.0       |  1.14.1 (1.13 works)  |        1.36.3        |
 
 ### ⬆️ Upgrade Policy
-Any minor or major upgrade to **Talos** or **Kubernetes** results in a major version change for this module. Downgrades are generally neither supported nor tested.
+Releases follow semantic versioning and a published tag never moves: pin `?ref=vX.Y.Z` and read the release notes before bumping it. Downgrades are neither supported nor tested.
 
 Changing software versions manually is not recommended. Component versions are selected and tested for compatibility with the Kubernetes release shown above.
 
@@ -1459,67 +1260,12 @@ Changing software versions manually is not recommended. Component versions are s
 > - Upgrade to the latest minor release before upgrading to the next major version.
 > - Verify that the cluster is healthy before and after upgrades.
 
-<!--
-- Talos/K8s: https://github.com/siderolabs/talos/blob/release-1.6/pkg/machinery/constants/constants.go
-- HCCM: https://github.com/hetznercloud/hcloud-cloud-controller-manager/blob/main/docs/reference/version-policy.md
-- HCSI: https://github.com/hetznercloud/csi-driver/blob/main/docs/kubernetes/versioning-policy.md
-- Longhorn: https://longhorn.io/docs/1.10.0/best-practices/#kubernetes-version
-- Cilium: https://github.com/cilium/cilium/blob/v1.19.2/Documentation/network/kubernetes/compatibility.rst
-- Cert Manager: https://cert-manager.io/docs/releases/
-- Cert Manager Webhook Hetzner: https://github.com/hetzner/cert-manager-webhook-hetzner/releases
-- Autoscaler: https://github.com/kubernetes/autoscaler/blob/master/cluster-autoscaler/README.md#releases
--->
 
 
 <!-- Roadmap -->
 ### 🧭 Roadmap
-* [ ] **Ingress NGINX [Retirement in March 2026](https://kubernetes.io/blog/2025/11/11/ingress-nginx-retirement/)**<br>
-  * [x] Add general support for Gateway API
-  * [x] Integrate Cilium Gateway API
-  * [x] Deprecate Ingress NGINX in v4
-  * [ ] Remove Ingress NGINX in v6
-* [x] **Support for Hetzner [Dedicated Bare Metal Servers](https://www.hetzner.com/de/dedicated-rootserver/)**
-
-<!-- Support this Project -->
-## ❤️ Support this Project
-If you'd like to support this project, please consider leaving a ⭐ on GitHub!<br>
-<a href="https://github.com/hcloud-k8s/terraform-hcloud-kubernetes">
-  <img
-    src="https://img.shields.io/github/stars/hcloud-k8s/terraform-hcloud-kubernetes"
-    alt="Stars"
-    width="105"
-  />
-</a>
-
-
-<!-- <picture>
- <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=hcloud-k8s/terraform-hcloud-kubernetes&type=date&theme=dark&legend=top-left" />
- <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=hcloud-k8s/terraform-hcloud-kubernetes&type=date&legend=top-left" />
- <img width="700" alt="Star History Chart" src="https://api.star-history.com/svg?repos=hcloud-k8s/terraform-hcloud-kubernetes&type=date&legend=top-left" />
-</picture> -->
-
-### 💖 Special Thanks to All Sponsors! 💖
-<p align="center">
-<!-- sponsors-highlighted --><!-- sponsors-highlighted -->
-</p>
-<p align="center">
-<!-- sponsors --><a href="https://github.com/jonakoudijs"><img src="https://github.com/jonakoudijs.png" width="80px" alt="Jona Koudijs" /></a>&nbsp;&nbsp;<a href="https://liberapay.com/devXY"><img src="https://seccdn.libravatar.org/avatar/b6dddcd2f3a8097b0f1e148d14ebd1c4?s=160&amp;d=404&amp;=1" width="80px" alt="devXY" /></a>&nbsp;&nbsp;<a href="https://github.com/paperclipinc"><img src="https://github.com/paperclipinc.png" width="80px" alt="Paperclip.inc" /></a>&nbsp;&nbsp;<a href="https://github.com/lukasgabriel"><img src="https://github.com/lukasgabriel.png" width="80px" alt="Lukas Gabriel" /></a>&nbsp;&nbsp;<!-- sponsors -->
-</p>
-
-Your sponsorship supports the ongoing development, improvement, and maintenance of this project 🙏
-<br>
-
-**Become a Sponsor:**
-- <summary>
-    <a href="https://github.com/sponsors/hcloud-k8s">
-      <img align="center" alt="GitHub Sponsors" src="https://img.shields.io/github/sponsors/hcloud-k8s?label=GitHub%20Sponsors&logo=GitHub&color=%23fe8e86" />
-    </a>
-  </summary>
-- <summary>
-    <a href="https://liberapay.com/hcloud-k8s">
-      <img align="center" alt="Liberapay Patrons" src="https://img.shields.io/liberapay/patrons/hcloud-k8s.svg?label=Liberapay%20Patrons&logo=liberapay" />
-    </a>
-  </summary>
+* [ ] **v1.1** — the self-updating NixOS subnet router (on `main`; a fresh install on `nixos-26.05` does not join the tailnet yet)
+* [ ] **v2** — move from `local-exec` to the talos provider's `talos_machine` / `talos_cluster` resources
 
 <!-- Community -->
 ## 👋 Community
@@ -1533,23 +1279,7 @@ or report [Issues](https://github.com/hcloud-k8s/terraform-hcloud-kubernetes/iss
 <!-- Contributing -->
 ### 🤝 Contributing
 
-<a href="https://github.com/hcloud-k8s/terraform-hcloud-kubernetes/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=hcloud-k8s/terraform-hcloud-kubernetes" />
-</a>
-
-
-Contributions are always welcome!
-
-<!-- Project Meta -->
-## 📎 Project Info
-Hcloud Kubernetes is an independent, [open source](https://opensource.org/osd) project built for the Hetzner Community. Its goal is to make Kubernetes deployments as predictable, repeatable, and flexible as possible.
-
-<div align="center">
-  <img src="https://raw.githubusercontent.com/hcloud-k8s/terraform-hcloud-kubernetes/main/assets/images/supported-by-hetzner-red.png" alt="Supported by Hetzner" width="400" />
-  <p>
-    This project is supported by Hetzner through testing infrastructure ❤️
-  </p>
-</div>
+Contributions are welcome: open an issue or a pull request in this repository. Changes that are not specific to the fork are better proposed upstream, where everyone benefits.
 
 <!-- License -->
 ### ⚖️ License
@@ -1559,5 +1289,6 @@ Distributed under the MIT License. See [LICENSE](LICENSE) and [NOTICE.md](NOTICE
 <!-- Acknowledgments -->
 ### 💎 Acknowledgements
 
+- [hcloud-k8s/terraform-hcloud-kubernetes](https://github.com/hcloud-k8s/terraform-hcloud-kubernetes) and its maintainers — this fork is built on their work.
 - [Talos Linux](https://www.talos.dev) for its impressively secure, immutable, and minimalistic Kubernetes distribution.
 - [Hetzner Cloud](https://www.hetzner.com/cloud) for offering excellent cloud infrastructure with robust Kubernetes integrations.
